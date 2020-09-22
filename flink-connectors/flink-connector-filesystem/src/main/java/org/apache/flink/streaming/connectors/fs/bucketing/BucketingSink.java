@@ -15,12 +15,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.connectors.fs.bucketing;
 
-import org.apache.commons.lang3.time.StopWatch;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.OperatorStateStore;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.typeutils.InputTypeConfigurable;
@@ -29,48 +30,52 @@ import org.apache.flink.runtime.fs.hdfs.HadoopFileSystem;
 import org.apache.flink.runtime.state.CheckpointListener;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
+import org.apache.flink.runtime.state.JavaSerializer;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
-import org.apache.flink.streaming.api.checkpoint.CheckpointedRestoring;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 import org.apache.flink.streaming.connectors.fs.Clock;
-import org.apache.flink.streaming.connectors.fs.RollingSink;
 import org.apache.flink.streaming.connectors.fs.SequenceFileWriter;
 import org.apache.flink.streaming.connectors.fs.StringWriter;
 import org.apache.flink.streaming.connectors.fs.Writer;
 import org.apache.flink.streaming.runtime.tasks.ProcessingTimeCallback;
 import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
 import org.apache.flink.util.Preconditions;
+
+import org.apache.commons.lang3.time.StopWatch;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.io.Serializable;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import java.util.Iterator;
 
 /**
  * Sink that emits its input elements to {@link FileSystem} files within
  * buckets. This is integrated with the checkpointing mechanism to provide exactly once semantics.
  *
- * <p>
- * When creating the sink a {@code basePath} must be specified. The base directory contains
+ *
+ * <p>When creating the sink a {@code basePath} must be specified. The base directory contains
  * one directory for every bucket. The bucket directories themselves contain several part files,
  * one for each parallel subtask of the sink. These part files contain the actual output data.
  *
- * <p>
- * The sink uses a {@link Bucketer} to determine in which bucket directory each element should
+ *
+ * <p>The sink uses a {@link Bucketer} to determine in which bucket directory each element should
  * be written to inside the base directory. The {@code Bucketer} can, for example, use time or
  * a property of the element to determine the bucket directory. The default {@code Bucketer} is a
  * {@link DateTimeBucketer} which will create one new bucket every hour. You can specify
@@ -78,17 +83,19 @@ import java.util.Iterator;
  * {@link BasePathBucketer} if you don't want to have buckets but still want to write part-files
  * in a fault-tolerant way.
  *
- * <p>
- * The filenames of the part files contain the part prefix, the parallel subtask index of the sink
+ *
+ * <p>The filenames of the part files contain the part prefix, the parallel subtask index of the sink
  * and a rolling counter. For example the file {@code "part-1-17"} contains the data from
  * {@code subtask 1} of the sink and is the {@code 17th} bucket created by that subtask. Per default
  * the part prefix is {@code "part"} but this can be configured using {@link #setPartPrefix(String)}.
- * When a part file becomes bigger than the user-specified batch size the current part file is closed,
- * the part counter is increased and a new part file is created. The batch size defaults to {@code 384MB},
- * this can be configured using {@link #setBatchSize(long)}.
+ * When a part file becomes bigger than the user-specified batch size or when the part file becomes older
+ * than the user-specified roll over interval the current part file is closed, the part counter is increased
+ * and a new part file is created. The batch size defaults to {@code 384MB}, this can be configured
+ * using {@link #setBatchSize(long)}. The roll over interval defaults to {@code Long.MAX_VALUE} and
+ * this can be configured using {@link #setBatchRolloverInterval(long)}.
  *
- * <p>
- * In some scenarios, the open buckets are required to change based on time. In these cases, the sink
+ *
+ * <p>In some scenarios, the open buckets are required to change based on time. In these cases, the sink
  * needs to determine when a bucket has become inactive, in order to flush and close the part file.
  * To support this there are two configurable settings:
  * <ol>
@@ -97,17 +104,17 @@ import java.util.Iterator;
  *     <li>the minimum amount of time a bucket has to not receive any data before it is considered inactive,
  *     configured by {@link #setInactiveBucketThreshold(long)}</li>
  * </ol>
- * Both of these parameters default to {@code 60,000 ms}, or {@code 1 min}.
+ * Both of these parameters default to {@code 60, 000 ms}, or {@code 1 min}.
  *
- * <p>
- * Part files can be in one of three states: {@code in-progress}, {@code pending} or {@code finished}.
+ *
+ * <p>Part files can be in one of three states: {@code in-progress}, {@code pending} or {@code finished}.
  * The reason for this is how the sink works together with the checkpointing mechanism to provide exactly-once
  * semantics and fault-tolerance. The part file that is currently being written to is {@code in-progress}. Once
  * a part file is closed for writing it becomes {@code pending}. When a checkpoint is successful the currently
  * pending files will be moved to {@code finished}.
  *
- * <p>
- * If case of a failure, and in order to guarantee exactly-once semantics, the sink should roll back to the state it
+ *
+ * <p>If case of a failure, and in order to guarantee exactly-once semantics, the sink should roll back to the state it
  * had when that last successful checkpoint occurred. To this end, when restoring, the restored files in {@code pending}
  * state are transferred into the {@code finished} state while any {@code in-progress} files are rolled back, so that
  * they do not contain data that arrived after the checkpoint from which we restore. If the {@code FileSystem} supports
@@ -117,8 +124,8 @@ import java.util.Iterator;
  * to that point. The prefixes and suffixes for the different file states and valid-length files can be configured
  * using the adequate setter method, e.g. {@link #setPendingSuffix(String)}.
  *
- * <p>
- * <b>NOTE:</b>
+ *
+ * <p><b>NOTE:</b>
  * <ol>
  *     <li>
  *         If checkpointing is not enabled the pending files will never be moved to the finished state. In that case,
@@ -132,32 +139,41 @@ import java.util.Iterator;
  *         {@link #setWriter(Writer)}. For example, {@link SequenceFileWriter}
  *         can be used to write Hadoop {@code SequenceFiles}.
  *     </li>
+ *     <li>
+ *       	{@link #closePartFilesByTime(long)} closes buckets that have not been written to for
+ *       	{@code inactiveBucketThreshold} or if they are older than {@code batchRolloverInterval}.
+ *     </li>
  * </ol>
  *
- * <p>
- * Example:
+ *
+ * <p>Example:
  * <pre>{@code
  *     new BucketingSink<Tuple2<IntWritable, Text>>(outPath)
  *         .setWriter(new SequenceFileWriter<IntWritable, Text>())
  *         .setBucketer(new DateTimeBucketer("yyyy-MM-dd--HHmm")
  * }</pre>
  *
- * This will create a sink that writes to {@code SequenceFiles} and rolls every minute.
+ * <p>This will create a sink that writes to {@code SequenceFiles} and rolls every minute.
  *
  * @see DateTimeBucketer
  * @see StringWriter
  * @see SequenceFileWriter
  *
  * @param <T> Type of the elements emitted by this sink
+ *
+ * @deprecated Please use the
+ * {@link org.apache.flink.streaming.api.functions.sink.filesystem.StreamingFileSink StreamingFileSink}
+ * instead.
+ *
  */
+@Deprecated
 public class BucketingSink<T>
 		extends RichSinkFunction<T>
-		implements InputTypeConfigurable, CheckpointedFunction, CheckpointListener,
-					CheckpointedRestoring<RollingSink.BucketState>, ProcessingTimeCallback {
+		implements InputTypeConfigurable, CheckpointedFunction, CheckpointListener, ProcessingTimeCallback {
 
 	private static final long serialVersionUID = 1L;
 
-	private static Logger LOG = LoggerFactory.getLogger(BucketingSink.class);
+	private static final Logger LOG = LoggerFactory.getLogger(BucketingSink.class);
 
 	// --------------------------------------------------------------------------------------------
 	//  User configuration values
@@ -167,69 +183,78 @@ public class BucketingSink<T>
 	/**
 	 * The default maximum size of part files (currently {@code 384 MB}).
 	 */
-	private final long DEFAULT_BATCH_SIZE = 1024L * 1024L * 384L;
+	private static final long DEFAULT_BATCH_SIZE = 1024L * 1024L * 384L;
 
 	/**
 	 * The default time between checks for inactive buckets. By default, {60 sec}.
 	 */
-	private final long DEFAULT_INACTIVE_BUCKET_CHECK_INTERVAL_MS = 60 * 1000L;
+	private static final long DEFAULT_INACTIVE_BUCKET_CHECK_INTERVAL_MS = 60 * 1000L;
 
 	/**
 	 * The default threshold (in {@code ms}) for marking a bucket as inactive and
 	 * closing its part files. By default, {60 sec}.
 	 */
-	private final long DEFAULT_INACTIVE_BUCKET_THRESHOLD_MS = 60 * 1000L;
+	private static final long DEFAULT_INACTIVE_BUCKET_THRESHOLD_MS = 60 * 1000L;
 
 	/**
 	 * The suffix for {@code in-progress} part files. These are files we are
 	 * currently writing to, but which were not yet confirmed by a checkpoint.
 	 */
-	private final String DEFAULT_IN_PROGRESS_SUFFIX = ".in-progress";
+	private static final String DEFAULT_IN_PROGRESS_SUFFIX = ".in-progress";
 
 	/**
 	 * The prefix for {@code in-progress} part files. These are files we are
 	 * currently writing to, but which were not yet confirmed by a checkpoint.
 	 */
-	private final String DEFAULT_IN_PROGRESS_PREFIX = "_";
+	private static final String DEFAULT_IN_PROGRESS_PREFIX = "_";
 
 	/**
 	 * The suffix for {@code pending} part files. These are closed files that we are
 	 * not currently writing to (inactive or reached {@link #batchSize}), but which
 	 * were not yet confirmed by a checkpoint.
 	 */
-	private final String DEFAULT_PENDING_SUFFIX = ".pending";
+	private static final String DEFAULT_PENDING_SUFFIX = ".pending";
 
 	/**
 	 * The prefix for {@code pending} part files. These are closed files that we are
 	 * not currently writing to (inactive or reached {@link #batchSize}), but which
 	 * were not yet confirmed by a checkpoint.
 	 */
-	private final String DEFAULT_PENDING_PREFIX = "_";
+	private static final String DEFAULT_PENDING_PREFIX = "_";
 
 	/**
 	 * When {@code truncate()} is not supported by the used {@link FileSystem}, we create
 	 * a file along the part file with this suffix that contains the length up to which
 	 * the part file is valid.
 	 */
-	private final String DEFAULT_VALID_SUFFIX = ".valid-length";
+	private static final String DEFAULT_VALID_SUFFIX = ".valid-length";
 
 	/**
 	 * When {@code truncate()} is not supported by the used {@link FileSystem}, we create
 	 * a file along the part file with this preffix that contains the length up to which
 	 * the part file is valid.
 	 */
-	private final String DEFAULT_VALID_PREFIX = "_";
+	private static final String DEFAULT_VALID_PREFIX = "_";
 
 	/**
 	 * The default prefix for part files.
 	 */
-	private final String DEFAULT_PART_REFIX = "part";
+	private static final String DEFAULT_PART_PREFIX = "part";
+
+	/**
+	 * The default suffix for part files.
+	 */
+	private static final String DEFAULT_PART_SUFFIX = null;
 
 	/**
 	 * The default timeout for asynchronous operations such as recoverLease and truncate (in {@code ms}).
 	 */
-	private final long DEFAULT_ASYNC_TIMEOUT_MS = 60 * 1000;
+	private static final long DEFAULT_ASYNC_TIMEOUT_MS = 60 * 1000;
 
+	/**
+	 * The default time interval at which part files are written to the filesystem.
+	 */
+	private static final long DEFAULT_BATCH_ROLLOVER_INTERVAL = Long.MAX_VALUE;
 
 	/**
 	 * The base {@code Path} that stores all bucket directories.
@@ -250,6 +275,7 @@ public class BucketingSink<T>
 	private long batchSize = DEFAULT_BATCH_SIZE;
 	private long inactiveBucketCheckInterval = DEFAULT_INACTIVE_BUCKET_CHECK_INTERVAL_MS;
 	private long inactiveBucketThreshold = DEFAULT_INACTIVE_BUCKET_THRESHOLD_MS;
+	private long batchRolloverInterval = DEFAULT_BATCH_ROLLOVER_INTERVAL;
 
 	// These are the actually configured prefixes/suffixes
 	private String inProgressSuffix = DEFAULT_IN_PROGRESS_SUFFIX;
@@ -259,9 +285,12 @@ public class BucketingSink<T>
 	private String pendingPrefix = DEFAULT_PENDING_PREFIX;
 
 	private String validLengthSuffix = DEFAULT_VALID_SUFFIX;
-	private String validLengthPrefix= DEFAULT_VALID_PREFIX;
+	private String validLengthPrefix = DEFAULT_VALID_PREFIX;
 
-	private String partPrefix = DEFAULT_PART_REFIX;
+	private String partPrefix = DEFAULT_PART_PREFIX;
+	private String partSuffix = DEFAULT_PART_SUFFIX;
+
+	private boolean useTruncate = true;
 
 	/**
 	 * The timeout for asynchronous operations such as recoverLease and truncate (in {@code ms}).
@@ -273,7 +302,7 @@ public class BucketingSink<T>
 	// -------------------------------------------§-------------------------------------------------
 
 	/**
-	 * We use reflection to get the .truncate() method, this is only available starting with Hadoop 2.7
+	 * We use reflection to get the .truncate() method, this is only available starting with Hadoop 2.7 .
 	 */
 	private transient Method refTruncate;
 
@@ -286,8 +315,9 @@ public class BucketingSink<T>
 	private transient ListState<State<T>> restoredBucketStates;
 
 	/**
-	 * User-defined FileSystem parameters
+	 * User-defined FileSystem parameters.
 	 */
+	@Nullable
 	private Configuration fsConfig;
 
 	/**
@@ -302,8 +332,8 @@ public class BucketingSink<T>
 	/**
 	 * Creates a new {@code BucketingSink} that writes files to the given base directory.
 	 *
-	 * <p>
-	 * This uses a{@link DateTimeBucketer} as {@link Bucketer} and a {@link StringWriter} has writer.
+	 *
+	 * <p>This uses a{@link DateTimeBucketer} as {@link Bucketer} and a {@link StringWriter} has writer.
 	 * The maximum bucket size is set to 384 MB.
 	 *
 	 * @param basePath The directory to which to write the bucket files.
@@ -330,7 +360,7 @@ public class BucketingSink<T>
 	 */
 	public BucketingSink<T> setFSConfig(org.apache.hadoop.conf.Configuration config) {
 		this.fsConfig = new Configuration();
-		for(Map.Entry<String, String> entry : config) {
+		for (Map.Entry<String, String> entry : config) {
 			fsConfig.setString(entry.getKey(), entry.getValue());
 		}
 		return this;
@@ -359,8 +389,12 @@ public class BucketingSink<T>
 			this.refTruncate = reflectTruncate(fs);
 		}
 
+		// We are using JavaSerializer from the flink-runtime module here. This is very naughty and
+		// we shouldn't be doing it because ideally nothing in the API modules/connector depends
+		// directly on flink-runtime. We are doing it here because we need to maintain backwards
+		// compatibility with old state and because we will have to rework/remove this code soon.
 		OperatorStateStore stateStore = context.getOperatorStateStore();
-		restoredBucketStates = stateStore.getSerializableListState("bucket-states");
+		this.restoredBucketStates = stateStore.getListState(new ListStateDescriptor<>("bucket-states", new JavaSerializer<>()));
 
 		int subtaskIndex = getRuntimeContext().getIndexOfThisSubtask();
 		if (context.isRestored()) {
@@ -403,25 +437,18 @@ public class BucketingSink<T>
 	 * @throws IOException
 	 */
 	private void initFileSystem() throws IOException {
-		if (fs != null) {
-			return;
+		if (fs == null) {
+			Path path = new Path(basePath);
+			fs = createHadoopFileSystem(path, fsConfig);
 		}
-		org.apache.hadoop.conf.Configuration hadoopConf = HadoopFileSystem.getHadoopConfiguration();
-		if (fsConfig != null) {
-			String disableCacheName = String.format("fs.%s.impl.disable.cache", new Path(basePath).toUri().getScheme());
-			hadoopConf.setBoolean(disableCacheName, true);
-			for (String key : fsConfig.keySet()) {
-				hadoopConf.set(key, fsConfig.getString(key, null));
-			}
-		}
-
-		fs = new Path(basePath).getFileSystem(hadoopConf);
 	}
 
 	@Override
 	public void close() throws Exception {
-		for (Map.Entry<String, BucketState<T>> entry : state.bucketStates.entrySet()) {
-			closeCurrentPartFile(entry.getValue());
+		if (state != null) {
+			for (Map.Entry<String, BucketState<T>> entry : state.bucketStates.entrySet()) {
+				closeCurrentPartFile(entry.getValue());
+			}
 		}
 	}
 
@@ -437,7 +464,7 @@ public class BucketingSink<T>
 			state.addBucketState(bucketPath, bucketState);
 		}
 
-		if (shouldRoll(bucketState)) {
+		if (shouldRoll(bucketState, currentProcessingTime)) {
 			openNewPartFile(bucketPath, bucketState);
 		}
 
@@ -451,9 +478,10 @@ public class BucketingSink<T>
 	 * <ol>
 	 *     <li>no file is created yet for the task to write to, or</li>
 	 *     <li>the current file has reached the maximum bucket size.</li>
+	 *     <li>the current file is older than roll over interval</li>
 	 * </ol>
 	 */
-	private boolean shouldRoll(BucketState<T> bucketState) throws IOException {
+	private boolean shouldRoll(BucketState<T> bucketState, long currentProcessingTime) throws IOException {
 		boolean shouldRoll = false;
 		int subtaskIndex = getRuntimeContext().getIndexOfThisSubtask();
 		if (!bucketState.isWriterOpen) {
@@ -468,6 +496,14 @@ public class BucketingSink<T>
 					subtaskIndex,
 					writePosition,
 					batchSize);
+			} else {
+				if (currentProcessingTime - bucketState.creationTime > batchRolloverInterval) {
+					shouldRoll = true;
+					LOG.debug(
+						"BucketingSink {} starting new bucket because file is older than roll over interval {}.",
+						subtaskIndex,
+						batchRolloverInterval);
+				}
 			}
 		}
 		return shouldRoll;
@@ -477,21 +513,23 @@ public class BucketingSink<T>
 	public void onProcessingTime(long timestamp) throws Exception {
 		long currentProcessingTime = processingTimeService.getCurrentProcessingTime();
 
-		checkForInactiveBuckets(currentProcessingTime);
+		closePartFilesByTime(currentProcessingTime);
 
 		processingTimeService.registerTimer(currentProcessingTime + inactiveBucketCheckInterval, this);
 	}
 
 	/**
 	 * Checks for inactive buckets, and closes them. Buckets are considered inactive if they have not been
-	 * written to for a period greater than {@code inactiveBucketThreshold} ms. This enables in-progress
-	 * files to be moved to the pending state and be finalised on the next checkpoint.
+	 * written to for a period greater than {@code inactiveBucketThreshold} ms. Buckets are also closed if they are
+	 * older than {@code batchRolloverInterval} ms. This enables in-progress files to be moved to the pending state
+	 * and be finalised on the next checkpoint.
 	 */
-	private void checkForInactiveBuckets(long currentProcessingTime) throws Exception {
+	private void closePartFilesByTime(long currentProcessingTime) throws Exception {
 
 		synchronized (state.bucketStates) {
 			for (Map.Entry<String, BucketState<T>> entry : state.bucketStates.entrySet()) {
-				if (entry.getValue().lastWrittenToTime < currentProcessingTime - inactiveBucketThreshold) {
+				if ((entry.getValue().lastWrittenToTime < currentProcessingTime - inactiveBucketThreshold)
+						|| (entry.getValue().creationTime < currentProcessingTime - batchRolloverInterval)) {
 					LOG.debug("BucketingSink {} closing bucket due to inactivity of over {} ms.",
 						getRuntimeContext().getIndexOfThisSubtask(), inactiveBucketThreshold);
 					closeCurrentPartFile(entry.getValue());
@@ -524,13 +562,16 @@ public class BucketingSink<T>
 		// clean the base directory in case of rescaling.
 
 		int subtaskIndex = getRuntimeContext().getIndexOfThisSubtask();
-		Path partPath = new Path(bucketPath, partPrefix + "-" + subtaskIndex + "-" + bucketState.partCounter);
+		Path partPath = assemblePartPath(bucketPath, subtaskIndex, bucketState.partCounter);
 		while (fs.exists(partPath) ||
 				fs.exists(getPendingPathFor(partPath)) ||
 				fs.exists(getInProgressPathFor(partPath))) {
 			bucketState.partCounter++;
-			partPath = new Path(bucketPath, partPrefix + "-" + subtaskIndex + "-" + bucketState.partCounter);
+			partPath = assemblePartPath(bucketPath, subtaskIndex, bucketState.partCounter);
 		}
+
+		// Record the creation time of the bucket
+		bucketState.creationTime = processingTimeService.getCurrentProcessingTime();
 
 		// increase, so we don't have to check for this name next time
 		bucketState.partCounter++;
@@ -541,6 +582,12 @@ public class BucketingSink<T>
 		Path inProgressPath = getInProgressPathFor(partPath);
 		if (bucketState.writer == null) {
 			bucketState.writer = writerTemplate.duplicate();
+			if (bucketState.writer == null) {
+				throw new UnsupportedOperationException(
+					"Could not duplicate writer. " +
+						"Class '" + writerTemplate.getClass().getCanonicalName() + "' must implement the 'Writer.duplicate()' method."
+				);
+			}
 		}
 
 		bucketState.writer.open(fs, inProgressPath);
@@ -572,12 +619,18 @@ public class BucketingSink<T>
 
 	/**
 	 * Gets the truncate() call using reflection.
-	 * <p>
-	 * <b>NOTE:</b> This code comes from Flume.
+	 *
+	 * <p><b>NOTE:</b> This code comes from Flume.
 	 */
 	private Method reflectTruncate(FileSystem fs) {
+		// completely disable the check for truncate() because the check can be problematic
+		// on some filesystem implementations
+		if (!useTruncate) {
+			return null;
+		}
+
 		Method m = null;
-		if(fs != null) {
+		if (fs != null) {
 			Class<?> fsClass = fs.getClass();
 			try {
 				m = fsClass.getMethod("truncate", Path.class, long.class);
@@ -588,32 +641,41 @@ public class BucketingSink<T>
 			}
 
 			// verify that truncate actually works
-			FSDataOutputStream outputStream;
-			Path testPath = new Path(UUID.randomUUID().toString());
+			Path testPath = new Path(basePath, UUID.randomUUID().toString());
 			try {
-				outputStream = fs.create(testPath);
-				outputStream.writeUTF("hello");
-				outputStream.close();
-			} catch (IOException e) {
-				LOG.error("Could not create file for checking if truncate works.", e);
-				throw new RuntimeException("Could not create file for checking if truncate works.", e);
-			}
+				try (FSDataOutputStream outputStream = fs.create(testPath)) {
+					outputStream.writeUTF("hello");
+				} catch (IOException e) {
+					LOG.error("Could not create file for checking if truncate works.", e);
+					throw new RuntimeException(
+							"Could not create file for checking if truncate works. " +
+									"You can disable support for truncate() completely via " +
+									"BucketingSink.setUseTruncate(false).", e);
+				}
 
-			try {
-				m.invoke(fs, testPath, 2);
-			} catch (IllegalAccessException | InvocationTargetException e) {
-				LOG.debug("Truncate is not supported.", e);
-				m = null;
-			}
-
-			try {
-				fs.delete(testPath, false);
-			} catch (IOException e) {
-				LOG.error("Could not delete truncate test file.", e);
-				throw new RuntimeException("Could not delete truncate test file.", e);
+				try {
+					m.invoke(fs, testPath, 2);
+				} catch (IllegalAccessException | InvocationTargetException e) {
+					LOG.debug("Truncate is not supported.", e);
+					m = null;
+				}
+			} finally {
+				try {
+					fs.delete(testPath, false);
+				} catch (IOException e) {
+					LOG.error("Could not delete truncate test file.", e);
+					throw new RuntimeException("Could not delete truncate test file. " +
+							"You can disable support for truncate() completely via " +
+							"BucketingSink.setUseTruncate(false).", e);
+				}
 			}
 		}
 		return m;
+	}
+
+	private Path assemblePartPath(Path bucket, int subtaskIndex, int partIndex) {
+		String localPartSuffix = partSuffix != null ? partSuffix : "";
+		return new Path(bucket, String.format("%s-%s-%s%s", partPrefix, subtaskIndex, partIndex, localPartSuffix));
 	}
 
 	private Path getPendingPathFor(Path path) {
@@ -677,6 +739,10 @@ public class BucketingSink<T>
 	}
 
 	@Override
+	public void notifyCheckpointAborted(long checkpointId) {
+	}
+
+	@Override
 	public void snapshotState(FunctionSnapshotContext context) throws Exception {
 		Preconditions.checkNotNull(restoredBucketStates, "The operator has not been properly initialized.");
 
@@ -726,20 +792,6 @@ public class BucketingSink<T>
 
 			bucketState.pendingFilesPerCheckpoint.clear();
 		}
-	}
-
-	private void handleRestoredRollingSinkState(RollingSink.BucketState restoredState) {
-		restoredState.pendingFiles.clear();
-
-		handlePendingInProgressFile(restoredState.currentFile, restoredState.currentFileValidLength);
-
-		// Now that we've restored the bucket to a valid state, reset the current file info
-		restoredState.currentFile = null;
-		restoredState.currentFileValidLength = -1;
-
-		handlePendingFilesForPreviousCheckpoints(restoredState.pendingFilesPerCheckpoint);
-
-		restoredState.pendingFilesPerCheckpoint.clear();
 	}
 
 	private void handlePendingInProgressFile(String file, long validLength) {
@@ -825,12 +877,12 @@ public class BucketingSink<T>
 						}
 					}
 				} else {
-					LOG.debug("Writing valid-length file for {} to specify valid length {}", partPath, validLength);
 					Path validLengthFilePath = getValidLengthPathFor(partPath);
 					if (!fs.exists(validLengthFilePath) && fs.exists(partPath)) {
-						FSDataOutputStream lengthFileOut = fs.create(validLengthFilePath);
-						lengthFileOut.writeUTF(Long.toString(validLength));
-						lengthFileOut.close();
+						LOG.debug("Writing valid-length file for {} to specify valid length {}", partPath, validLength);
+						try (FSDataOutputStream lengthFileOut = fs.create(validLengthFilePath)) {
+							lengthFileOut.writeUTF(Long.toString(validLength));
+						}
 					}
 				}
 
@@ -850,11 +902,12 @@ public class BucketingSink<T>
 
 		LOG.debug("Moving pending files to final location on restore.");
 
-		Set<Long> pastCheckpointIds = pendingFilesPerCheckpoint.keySet();
-		for (Long pastCheckpointId : pastCheckpointIds) {
+		for (Map.Entry<Long, List<String>> entry : pendingFilesPerCheckpoint.entrySet()) {
+			Long pastCheckpointId = entry.getKey();
+			List<String> pendingFiles = entry.getValue();
 			// All the pending files are buckets that have been completed but are waiting to be renamed
 			// to their final name
-			for (String filename : pendingFilesPerCheckpoint.get(pastCheckpointId)) {
+			for (String filename : pendingFiles) {
 				Path finalPath = new Path(filename);
 				Path pendingPath = getPendingPathFor(finalPath);
 
@@ -872,39 +925,39 @@ public class BucketingSink<T>
 	}
 
 	// --------------------------------------------------------------------------------------------
-	//  Backwards compatibility with Flink 1.1
-	// --------------------------------------------------------------------------------------------
-
-	@Override
-	public void restoreState(RollingSink.BucketState state) throws Exception {
-		LOG.info("{} (taskIdx={}) restored bucket state from the RollingSink an older Flink version: {}",
-			getClass().getSimpleName(), getRuntimeContext().getIndexOfThisSubtask(), state);
-
-		try {
-			initFileSystem();
-		} catch (IOException e) {
-			LOG.error("Error while creating FileSystem when restoring the state of the BucketingSink.", e);
-			throw new RuntimeException("Error while creating FileSystem when restoring the state of the BucketingSink.", e);
-		}
-
-		handleRestoredRollingSinkState(state);
-	}
-
-	// --------------------------------------------------------------------------------------------
 	//  Setters for User configuration values
 	// --------------------------------------------------------------------------------------------
 
 	/**
 	 * Sets the maximum bucket size in bytes.
 	 *
-	 * <p>
-	 * When a bucket part file becomes larger than this size a new bucket part file is started and
+	 *
+	 * <p>When a bucket part file becomes larger than this size a new bucket part file is started and
 	 * the old one is closed. The name of the bucket files depends on the {@link Bucketer}.
 	 *
 	 * @param batchSize The bucket part file size in bytes.
 	 */
 	public BucketingSink<T> setBatchSize(long batchSize) {
 		this.batchSize = batchSize;
+		return this;
+	}
+
+	/**
+	 * Sets the roll over interval in milliseconds.
+	 *
+	 *
+	 * <p>When a bucket part file is older than the roll over interval, a new bucket part file is
+	 * started and the old one is closed. The name of the bucket file depends on the {@link Bucketer}.
+	 * Additionally, the old part file is also closed if the bucket is not written to for a minimum of
+	 * {@code inactiveBucketThreshold} ms.
+	 *
+	 * @param batchRolloverInterval The roll over interval in milliseconds
+	 */
+	public BucketingSink<T> setBatchRolloverInterval(long batchRolloverInterval) {
+		if (batchRolloverInterval > 0) {
+			this.batchRolloverInterval = batchRolloverInterval;
+		}
+
 		return this;
 	}
 
@@ -921,6 +974,8 @@ public class BucketingSink<T>
 	/**
 	 * Sets the default threshold for marking a bucket as inactive and closing its part files.
 	 * Buckets which haven't been written to for at least this period of time become inactive.
+	 * Additionally, part files for the bucket are also closed if the bucket is older than
+	 * {@code batchRolloverInterval} ms.
 	 *
 	 * @param threshold The timeout, in milliseconds.
 	 */
@@ -950,7 +1005,7 @@ public class BucketingSink<T>
 	}
 
 	/**
-	 * Sets the suffix of in-progress part files. The default is {@code "in-progress"}.
+	 * Sets the suffix of in-progress part files. The default is {@code ".in-progress"}.
 	 */
 	public BucketingSink<T> setInProgressSuffix(String inProgressSuffix) {
 		this.inProgressSuffix = inProgressSuffix;
@@ -998,6 +1053,14 @@ public class BucketingSink<T>
 	}
 
 	/**
+	 * Sets the suffix of part files.  The default is no suffix.
+	 */
+	public BucketingSink<T> setPartSuffix(String partSuffix) {
+		this.partSuffix = partSuffix;
+		return this;
+	}
+
+	/**
 	 * Sets the prefix of part files.  The default is {@code "part"}.
 	 */
 	public BucketingSink<T> setPartPrefix(String partPrefix) {
@@ -1006,10 +1069,21 @@ public class BucketingSink<T>
 	}
 
 	/**
+	 * Sets whether to use {@code FileSystem.truncate()} to truncate written bucket files back to
+	 * a consistent state in case of a restore from checkpoint. If {@code truncate()} is not used
+	 * this sink will write valid-length files for corresponding bucket files that have to be used
+	 * when reading from bucket files to make sure to not read too far.
+	 */
+	public BucketingSink<T> setUseTruncate(boolean useTruncate) {
+		this.useTruncate = useTruncate;
+		return this;
+	}
+
+	/**
 	 * Disable cleanup of leftover in-progress/pending files when the sink is opened.
 	 *
-	 * <p>
-	 * This should only be disabled if using the sink without checkpoints, to not remove
+	 *
+	 * <p>This should only be disabled if using the sink without checkpoints, to not remove
 	 * the files already in the directory.
 	 *
 	 * @deprecated This option is deprecated and remains only for backwards compatibility.
@@ -1092,6 +1166,11 @@ public class BucketingSink<T>
 		long lastWrittenToTime;
 
 		/**
+		 * The time this bucket was created.
+		 */
+		long creationTime;
+
+		/**
 		 * Pending files that accumulated since the last checkpoint.
 		 */
 		List<String> pendingFiles = new ArrayList<>();
@@ -1131,6 +1210,109 @@ public class BucketingSink<T>
 
 		BucketState(long lastWrittenToTime) {
 			this.lastWrittenToTime = lastWrittenToTime;
+		}
+	}
+
+	// ------------------------------------------------------------------------
+	//  Utilities
+	// ------------------------------------------------------------------------
+
+	public static FileSystem createHadoopFileSystem(
+			Path path,
+			@Nullable Configuration extraUserConf) throws IOException {
+
+		// try to get the Hadoop File System via the Flink File Systems
+		// that way we get the proper configuration
+
+		final org.apache.flink.core.fs.FileSystem flinkFs =
+				org.apache.flink.core.fs.FileSystem.getUnguardedFileSystem(path.toUri());
+		final FileSystem hadoopFs = (flinkFs instanceof HadoopFileSystem) ?
+				((HadoopFileSystem) flinkFs).getHadoopFileSystem() : null;
+
+		// fast path: if the Flink file system wraps Hadoop anyways and we need no extra config,
+		// then we use it directly
+		if (extraUserConf == null && hadoopFs != null) {
+			return hadoopFs;
+		}
+		else {
+			// we need to re-instantiate the Hadoop file system, because we either have
+			// a special config, or the Path gave us a Flink FS that is not backed by
+			// Hadoop (like file://)
+
+			final org.apache.hadoop.conf.Configuration hadoopConf;
+			if (hadoopFs != null) {
+				// have a Hadoop FS but need to apply extra config
+				hadoopConf = hadoopFs.getConf();
+			}
+			else {
+				// the Path gave us a Flink FS that is not backed by Hadoop (like file://)
+				// we need to get access to the Hadoop file system first
+
+				// we access the Hadoop FS in Flink, which carries the proper
+				// Hadoop configuration. we should get rid of this once the bucketing sink is
+				// properly implemented against Flink's FS abstraction
+
+				URI genericHdfsUri = URI.create("hdfs://localhost:12345/");
+				org.apache.flink.core.fs.FileSystem accessor =
+						org.apache.flink.core.fs.FileSystem.getUnguardedFileSystem(genericHdfsUri);
+
+				if (!(accessor instanceof HadoopFileSystem)) {
+					throw new IOException(
+							"Cannot instantiate a Hadoop file system to access the Hadoop configuration. " +
+							"FS for hdfs:// is " + accessor.getClass().getName());
+				}
+
+				hadoopConf = ((HadoopFileSystem) accessor).getHadoopFileSystem().getConf();
+			}
+
+			// finalize the configuration
+
+			final org.apache.hadoop.conf.Configuration finalConf;
+			if (extraUserConf == null) {
+				finalConf = hadoopConf;
+			}
+			else {
+				finalConf = new org.apache.hadoop.conf.Configuration(hadoopConf);
+
+				for (String key : extraUserConf.keySet()) {
+					finalConf.set(key, extraUserConf.getString(key, null));
+				}
+			}
+
+			// we explicitly re-instantiate the file system here in order to make sure
+			// that the configuration is applied.
+
+			URI fsUri = path.toUri();
+			final String scheme = fsUri.getScheme();
+			final String authority = fsUri.getAuthority();
+
+			if (scheme == null && authority == null) {
+				fsUri = FileSystem.getDefaultUri(finalConf);
+			}
+			else if (scheme != null && authority == null) {
+				URI defaultUri = FileSystem.getDefaultUri(finalConf);
+				if (scheme.equals(defaultUri.getScheme()) && defaultUri.getAuthority() != null) {
+					fsUri = defaultUri;
+				}
+			}
+
+			final Class<? extends FileSystem> fsClass = FileSystem.getFileSystemClass(fsUri.getScheme(), finalConf);
+			final FileSystem fs;
+			try {
+				fs = fsClass.newInstance();
+			}
+			catch (Exception e) {
+				throw new IOException("Cannot instantiate the Hadoop file system", e);
+			}
+
+			fs.initialize(fsUri, finalConf);
+
+			// We don't perform checksums on Hadoop's local filesystem and use the raw filesystem.
+			// Otherwise buffers are not flushed entirely during checkpointing which results in data loss.
+			if (fs instanceof LocalFileSystem) {
+				return ((LocalFileSystem) fs).getRaw();
+			}
+			return fs;
 		}
 	}
 }

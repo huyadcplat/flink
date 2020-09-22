@@ -19,13 +19,13 @@
 package org.apache.flink.runtime.client;
 
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.util.FlinkException;
 
 /**
  * This exception is the base exception for all exceptions that denote any failure during
- * the execution of a job. The JobExecutionException and its subclasses are thrown by
- * the {@link JobClient}.
+ * the execution of a job.
  */
-public class JobExecutionException extends Exception {
+public class JobExecutionException extends FlinkException {
 
 	private static final long serialVersionUID = 2818087325120827525L;
 
@@ -33,7 +33,8 @@ public class JobExecutionException extends Exception {
 
 	/**
 	 * Constructs a new job execution exception.
-	 * 
+	 *
+	 * @param jobID The job's ID.
 	 * @param msg The cause for the execution exception.
 	 * @param cause The cause of the exception
 	 */

@@ -19,62 +19,82 @@
 package org.apache.flink.test.checkpointing;
 
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.TaskManagerOptions;
-import org.apache.flink.runtime.minicluster.LocalFlinkMiniCluster;
+import org.apache.flink.configuration.JobManagerOptions;
+import org.apache.flink.runtime.jobgraph.JobGraph;
+import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.util.TestStreamEnvironment;
-import org.apache.flink.test.util.TestUtils;
+import org.apache.flink.test.util.MiniClusterWithClientResource;
+import org.apache.flink.test.util.SuccessException;
+import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.TestLogger;
 
-import org.junit.AfterClass;
+import org.junit.After;
 import org.junit.Assert;
-import org.junit.BeforeClass;
+import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
 import java.io.Serializable;
+import java.util.Arrays;
+import java.util.Collection;
 
-import static org.junit.Assert.fail;
+import static org.apache.flink.test.util.TestUtils.submitJobAndWaitForResult;
 
 /**
- * Test base for fault tolerant streaming programs
+ * Test base for fault tolerant streaming programs.
  */
+@RunWith(Parameterized.class)
 public abstract class StreamFaultToleranceTestBase extends TestLogger {
+
+	@Parameterized.Parameters(name = "FailoverStrategy: {0}")
+	public static Collection<FailoverStrategy> parameters() {
+		return Arrays.asList(FailoverStrategy.RestartAllFailoverStrategy, FailoverStrategy.RestartPipelinedRegionFailoverStrategy);
+	}
+
+	/**
+	 * The failover strategy to use.
+	 */
+	public enum FailoverStrategy{
+		RestartAllFailoverStrategy,
+		RestartPipelinedRegionFailoverStrategy
+	}
+
+	@Parameterized.Parameter
+	public FailoverStrategy failoverStrategy;
 
 	protected static final int NUM_TASK_MANAGERS = 3;
 	protected static final int NUM_TASK_SLOTS = 4;
 	protected static final int PARALLELISM = NUM_TASK_MANAGERS * NUM_TASK_SLOTS;
 
-	private static LocalFlinkMiniCluster cluster;
+	private static MiniClusterWithClientResource cluster;
 
-	@BeforeClass
-	public static void startCluster() {
-		try {
-			Configuration config = new Configuration();
-			config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, NUM_TASK_MANAGERS);
-			config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, NUM_TASK_SLOTS);
-			config.setLong(TaskManagerOptions.MANAGED_MEMORY_SIZE, 12L);
-			
-			cluster = new LocalFlinkMiniCluster(config, false);
+	@Before
+	public void setup() throws Exception {
+		Configuration configuration = new Configuration();
+		switch (failoverStrategy) {
+			case RestartPipelinedRegionFailoverStrategy:
+				configuration.setString(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, "region");
+				break;
+			case RestartAllFailoverStrategy:
+				configuration.setString(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, "full");
+		}
 
-			cluster.start();
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail("Failed to start test cluster: " + e.getMessage());
-		}
+		cluster = new MiniClusterWithClientResource(
+			new MiniClusterResourceConfiguration.Builder()
+				.setConfiguration(configuration)
+				.setNumberTaskManagers(NUM_TASK_MANAGERS)
+				.setNumberSlotsPerTaskManager(NUM_TASK_SLOTS)
+				.build());
+		cluster.before();
 	}
 
-	@AfterClass
-	public static void stopCluster() {
-		try {
-			cluster.stop();
+	@After
+	public void shutDownExistingCluster() {
+		if (cluster != null) {
+			cluster.after();
 			cluster = null;
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail("Failed to stop test cluster: " + e.getMessage());
 		}
 	}
 
@@ -82,12 +102,12 @@ public abstract class StreamFaultToleranceTestBase extends TestLogger {
 	 * Implementations are expected to assemble the test topology in this function
 	 * using the provided {@link StreamExecutionEnvironment}.
 	 */
-	abstract public void testProgram(StreamExecutionEnvironment env);
+	public abstract void testProgram(StreamExecutionEnvironment env);
 
 	/**
 	 * Implementations are expected to provide test here to verify the correct behavior.
 	 */
-	abstract public void postSubmit() throws Exception ;
+	public abstract void postSubmit() throws Exception;
 
 	/**
 	 * Runs the following program the test program defined in {@link #testProgram(StreamExecutionEnvironment)}
@@ -96,15 +116,19 @@ public abstract class StreamFaultToleranceTestBase extends TestLogger {
 	@Test
 	public void runCheckpointedProgram() throws Exception {
 		try {
-			TestStreamEnvironment env = new TestStreamEnvironment(cluster, PARALLELISM);
+			StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 			env.setParallelism(PARALLELISM);
 			env.enableCheckpointing(500);
-			env.getConfig().disableSysoutLogging();
 			env.setRestartStrategy(RestartStrategies.fixedDelayRestart(Integer.MAX_VALUE, 0L));
 
 			testProgram(env);
 
-			TestUtils.tryExecute(env, "Fault Tolerance Test");
+			JobGraph jobGraph = env.getStreamGraph().getJobGraph();
+			try {
+				submitJobAndWaitForResult(cluster.getClusterClient(), jobGraph, getClass().getClassLoader());
+			} catch (Exception e) {
+				Assert.assertTrue(ExceptionUtils.findThrowable(e, SuccessException.class).isPresent());
+			}
 
 			postSubmit();
 		}
@@ -118,6 +142,9 @@ public abstract class StreamFaultToleranceTestBase extends TestLogger {
 	//  Frequently used utilities
 	// --------------------------------------------------------------------------------------------
 
+	/**
+	 * POJO storing prefix, value, and count.
+	 */
 	@SuppressWarnings("serial")
 	public static class PrefixCount implements Serializable {
 

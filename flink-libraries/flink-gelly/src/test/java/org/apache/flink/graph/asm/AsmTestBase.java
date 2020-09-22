@@ -24,20 +24,25 @@ import org.apache.flink.graph.Graph;
 import org.apache.flink.graph.generator.CompleteGraph;
 import org.apache.flink.graph.generator.EmptyGraph;
 import org.apache.flink.graph.generator.RMatGraph;
+import org.apache.flink.graph.generator.StarGraph;
 import org.apache.flink.graph.generator.random.JDKRandomGeneratorFactory;
 import org.apache.flink.types.IntValue;
 import org.apache.flink.types.LongValue;
 import org.apache.flink.types.NullValue;
+
 import org.junit.Before;
 
 import java.util.LinkedList;
 import java.util.List;
 
+/**
+ * Simple graphs for testing graph assembly functions.
+ */
 public class AsmTestBase {
 
 	protected ExecutionEnvironment env;
 
-	protected final double ACCURACY = 0.000001;
+	protected static final double ACCURACY = 0.000001;
 
 	// simple graph
 	protected Graph<IntValue, NullValue, NullValue> directedSimpleGraph;
@@ -52,11 +57,17 @@ public class AsmTestBase {
 	// empty graph
 	protected final long emptyGraphVertexCount = 3;
 
-	protected Graph<LongValue, NullValue, NullValue> emptyGraph;
+	protected Graph<LongValue, NullValue, NullValue> emptyGraphWithVertices;
+
+	protected Graph<LongValue, NullValue, NullValue> emptyGraphWithoutVertices;
+
+	// star graph
+	protected final long starGraphVertexCount = 29;
+
+	protected Graph<LongValue, NullValue, NullValue> starGraph;
 
 	@Before
-	public void setup()
-			throws Exception {
+	public void setup() throws Exception {
 		env = ExecutionEnvironment.createCollectionsEnvironment();
 		env.getConfig().enableObjectReuse();
 
@@ -85,8 +96,16 @@ public class AsmTestBase {
 		completeGraph = new CompleteGraph(env, completeGraphVertexCount)
 			.generate();
 
-		// empty graph
-		emptyGraph = new EmptyGraph(env, emptyGraphVertexCount)
+		// empty graph with vertices but no edges
+		emptyGraphWithVertices = new EmptyGraph(env, emptyGraphVertexCount)
+			.generate();
+
+		// empty graph with no vertices or edges
+		emptyGraphWithoutVertices = new EmptyGraph(env, 0)
+			.generate();
+
+		// star graph
+		starGraph = new StarGraph(env, starGraphVertexCount)
 			.generate();
 	}
 
@@ -95,12 +114,14 @@ public class AsmTestBase {
 	 * scale=10 and edgeFactor=16 but algorithms generating very large DataSets
 	 * require smaller input graphs.
 	 *
-	 * The examples program can write this graph as a CSV file for verifying
+	 * <p>The examples program can write this graph as a CSV file for verifying
 	 * algorithm results with external libraries:
 	 *
+	 * <pre>
 	 * ./bin/flink run examples/flink-gelly-examples_*.jar --algorithm EdgeList \
 	 *     --input RMatGraph --type long --simplify directed --scale $SCALE --edge_factor $EDGE_FACTOR \
 	 *     --output csv --filename directedRMatGraph.csv
+	 * </pre>
 	 *
 	 * @param scale vertices are generated in the range [0, 2<sup>scale</sup>)
 	 * @param edgeFactor the edge count is {@code edgeFactor} * 2<sup>scale</sup>
@@ -114,7 +135,7 @@ public class AsmTestBase {
 
 		return new RMatGraph<>(env, new JDKRandomGeneratorFactory(), vertexCount, edgeCount)
 			.generate()
-			.run(new org.apache.flink.graph.asm.simple.directed.Simplify<LongValue, NullValue, NullValue>());
+			.run(new org.apache.flink.graph.asm.simple.directed.Simplify<>());
 	}
 
 	/**
@@ -122,12 +143,14 @@ public class AsmTestBase {
 	 * scale=10 and edgeFactor=16 but algorithms generating very large DataSets
 	 * require smaller input graphs.
 	 *
-	 * The examples program can write this graph as a CSV file for verifying
+	 * <p>The examples program can write this graph as a CSV file for verifying
 	 * algorithm results with external libraries:
 	 *
+	 * <pre>
 	 * ./bin/flink run examples/flink-gelly-examples_*.jar --algorithm EdgeList \
 	 *     --input RMatGraph --type long --simplify undirected --scale $SCALE --edge_factor $EDGE_FACTOR \
 	 *     --output csv --filename undirectedRMatGraph.csv
+	 * </pre>
 	 *
 	 * @param scale vertices are generated in the range [0, 2<sup>scale</sup>)
 	 * @param edgeFactor the edge count is {@code edgeFactor} * 2<sup>scale</sup>
@@ -141,6 +164,6 @@ public class AsmTestBase {
 
 		return new RMatGraph<>(env, new JDKRandomGeneratorFactory(), vertexCount, edgeCount)
 			.generate()
-			.run(new org.apache.flink.graph.asm.simple.undirected.Simplify<LongValue, NullValue, NullValue>(false));
+			.run(new org.apache.flink.graph.asm.simple.undirected.Simplify<>(false));
 	}
 }

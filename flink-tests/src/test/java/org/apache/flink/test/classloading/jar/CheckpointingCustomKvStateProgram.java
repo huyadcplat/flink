@@ -24,7 +24,9 @@ import org.apache.flink.api.common.functions.RichFlatMapFunction;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.state.ReducingState;
 import org.apache.flink.api.common.state.ReducingStateDescriptor;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.base.TypeSerializerSingleton;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
@@ -46,6 +48,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
+/**
+ * Test class used by the {@link org.apache.flink.test.classloading.ClassLoaderITCase}.
+ */
 public class CheckpointingCustomKvStateProgram {
 
 	public static void main(String[] args) throws Exception {
@@ -56,8 +61,7 @@ public class CheckpointingCustomKvStateProgram {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
 		env.setParallelism(parallelism);
-		env.getConfig().disableSysoutLogging();
-		env.enableCheckpointing(100);
+				env.enableCheckpointing(100);
 		env.setRestartStrategy(RestartStrategies.fixedDelayRestart(1, 1000));
 		env.setStateBackend(new FsStateBackend(checkpointPath));
 
@@ -71,7 +75,7 @@ public class CheckpointingCustomKvStateProgram {
 						return new Tuple2<>(ThreadLocalRandom.current().nextInt(parallelism), value);
 					}
 				})
-				.keyBy(new KeySelector<Tuple2<Integer,Integer>, Integer>() {
+				.keyBy(new KeySelector<Tuple2<Integer, Integer>, Integer>() {
 					private static final long serialVersionUID = 1L;
 
 					@Override
@@ -133,12 +137,11 @@ public class CheckpointingCustomKvStateProgram {
 			this.kvState = getRuntimeContext().getReducingState(stateDescriptor);
 		}
 
-
 		@Override
 		public void flatMap(Tuple2<Integer, Integer> value, Collector<Integer> out) throws Exception {
 			kvState.add(value.f1);
 
-			if(atLeastOneSnapshotComplete) {
+			if (atLeastOneSnapshotComplete) {
 				if (restored) {
 					throw new SuccessException();
 				} else {
@@ -161,6 +164,10 @@ public class CheckpointingCustomKvStateProgram {
 		@Override
 		public void notifyCheckpointComplete(long checkpointId) throws Exception {
 			atLeastOneSnapshotComplete = true;
+		}
+
+		@Override
+		public void notifyCheckpointAborted(long checkpointId) {
 		}
 
 		private static class ReduceSum implements ReduceFunction<Integer> {
@@ -224,9 +231,22 @@ public class CheckpointingCustomKvStateProgram {
 			target.writeInt(source.readInt());
 		}
 
+		// -----------------------------------------------------------------------------------
+
 		@Override
-		public boolean canEqual(Object obj) {
-			return obj instanceof CustomIntSerializer;
+		public TypeSerializerSnapshot<Integer> snapshotConfiguration() {
+			return new CustomIntSerializerSnapshot();
+		}
+
+		/**
+		 * Serializer configuration snapshot for compatibility and format evolution.
+		 */
+		@SuppressWarnings("WeakerAccess")
+		public static final class CustomIntSerializerSnapshot extends SimpleTypeSerializerSnapshot<Integer> {
+
+			public CustomIntSerializerSnapshot() {
+				super(() -> INSTANCE);
+			}
 		}
 	}
 }

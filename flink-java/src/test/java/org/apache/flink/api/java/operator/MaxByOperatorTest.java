@@ -15,22 +15,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.flink.api.java.operator;
 
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
+package org.apache.flink.api.java.operator;
 
 import org.apache.flink.api.common.InvalidProgramException;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.operators.UnsortedGrouping;
 import org.apache.flink.api.java.tuple.Tuple5;
+import org.apache.flink.api.java.typeutils.RowTypeInfo;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
+import org.apache.flink.types.Row;
+
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * Tests for {@link DataSet#maxBy(int...)}.
+ */
 public class MaxByOperatorTest {
 
 	// TUPLE DATA
@@ -42,7 +52,7 @@ public class MaxByOperatorTest {
 			BasicTypeInfo.INT_TYPE_INFO);
 
 	/**
-	 * This test validates that no exceptions is thrown when an empty dataset 
+	 * This test validates that no exceptions is thrown when an empty dataset
 	 * calls maxBy().
 	 */
 	@Test
@@ -62,26 +72,26 @@ public class MaxByOperatorTest {
 	}
 
 	private final List<CustomType> customTypeData = new ArrayList<CustomType>();
-	
+
 	/**
-	 * This test validates that an InvalidProgrammException is thrown when maxBy 
+	 * This test validates that an InvalidProgramException is thrown when maxBy
 	 * is used on a custom data type.
 	 */
 	@Test(expected = InvalidProgramException.class)
 	public void testCustomKeyFieldsDataset() {
 
 		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
-		
+
 		this.customTypeData.add(new CustomType());
-		
+
 		DataSet<CustomType> customDs = env.fromCollection(customTypeData);
 		// should not work: groups on custom type
 		customDs.maxBy(0);
 	}
-	
+
 	/**
 	 * This test validates that an index which is out of bounds throws an
-	 * IndexOutOfBOundsExcpetion.
+	 * IndexOutOfBoundsException.
 	 */
 	@Test(expected = IndexOutOfBoundsException.class)
 	public void testOutOfTupleBoundsDataset1() {
@@ -92,10 +102,10 @@ public class MaxByOperatorTest {
 		// should not work, key out of tuple bounds
 		tupleDs.maxBy(5);
 	}
-	
+
 	/**
 	 * This test validates that an index which is out of bounds throws an
-	 * IndexOutOfBOundsExcpetion.
+	 * IndexOutOfBoundsException.
 	 */
 	@Test(expected = IndexOutOfBoundsException.class)
 	public void testOutOfTupleBoundsDataset2() {
@@ -106,10 +116,10 @@ public class MaxByOperatorTest {
 		// should not work, key out of tuple bounds
 		tupleDs.maxBy(-1);
 	}
-	
+
 	/**
 	 * This test validates that an index which is out of bounds throws an
-	 * IndexOutOfBOundsExcpetion.
+	 * IndexOutOfBoundsException.
 	 */
 	@Test(expected = IndexOutOfBoundsException.class)
 	public void testOutOfTupleBoundsDataset3() {
@@ -118,13 +128,13 @@ public class MaxByOperatorTest {
 		DataSet<Tuple5<Integer, Long, String, Long, Integer>> tupleDs = env.fromCollection(emptyTupleData, tupleTypeInfo);
 
 		// should not work, key out of tuple bounds
-		tupleDs.maxBy(1,2,3,4,-1);
+		tupleDs.maxBy(1, 2, 3, 4, -1);
 	}
-	
+
 	//---------------------------- GROUPING TESTS BELOW --------------------------------------
-	
+
 	/**
-	 * This test validates that no exceptions is thrown when an empty grouping 
+	 * This test validates that no exceptions is thrown when an empty grouping
 	 * calls maxBy().
 	 */
 	@Test
@@ -142,24 +152,24 @@ public class MaxByOperatorTest {
 	}
 
 	/**
-	 * This test validates that an InvalidProgrammException is thrown when maxBy 
+	 * This test validates that an InvalidProgramException is thrown when maxBy
 	 * is used on a custom data type.
 	 */
 	@Test(expected = InvalidProgramException.class)
 	public void testCustomKeyFieldsGrouping() {
 
 		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
-		
+
 		this.customTypeData.add(new CustomType());
-		
+
 		UnsortedGrouping<CustomType> groupDs = env.fromCollection(customTypeData).groupBy(0);
 		// should not work: groups on custom type
 		groupDs.maxBy(0);
 	}
-	
+
 	/**
 	 * This test validates that an index which is out of bounds throws an
-	 * IndexOutOfBOundsExcpetion.
+	 * IndexOutOfBoundsException.
 	 */
 	@Test(expected = IndexOutOfBoundsException.class)
 	public void testOutOfTupleBoundsGrouping1() {
@@ -170,10 +180,10 @@ public class MaxByOperatorTest {
 		// should not work, key out of tuple bounds
 		groupDs.maxBy(5);
 	}
-	
+
 	/**
 	 * This test validates that an index which is out of bounds throws an
-	 * IndexOutOfBOundsExcpetion.
+	 * IndexOutOfBoundsException.
 	 */
 	@Test(expected = IndexOutOfBoundsException.class)
 	public void testOutOfTupleBoundsGrouping2() {
@@ -184,10 +194,10 @@ public class MaxByOperatorTest {
 		// should not work, key out of tuple bounds
 		groupDs.maxBy(-1);
 	}
-	
+
 	/**
 	 * This test validates that an index which is out of bounds throws an
-	 * IndexOutOfBOundsExcpetion.
+	 * IndexOutOfBoundsException.
 	 */
 	@Test(expected = IndexOutOfBoundsException.class)
 	public void testOutOfTupleBoundsGrouping3() {
@@ -196,7 +206,44 @@ public class MaxByOperatorTest {
 		UnsortedGrouping<Tuple5<Integer, Long, String, Long, Integer>> groupDs = env.fromCollection(emptyTupleData, tupleTypeInfo).groupBy(0);
 
 		// should not work, key out of tuple bounds
-		groupDs.maxBy(1,2,3,4,-1);
+		groupDs.maxBy(1, 2, 3, 4, -1);
+	}
+
+	/**
+	 * Validates that no ClassCastException happens
+	 * should not fail e.g. like in FLINK-8255.
+	 */
+	@Test(expected = InvalidProgramException.class)
+	public void testMaxByRowTypeInfoKeyFieldsDataset() {
+
+		final ExecutionEnvironment env = ExecutionEnvironment
+				.getExecutionEnvironment();
+		TypeInformation[] types = new TypeInformation[] {Types.INT, Types.INT};
+
+		String[] fieldNames = new String[]{"id", "value"};
+		RowTypeInfo rowTypeInfo = new RowTypeInfo(types, fieldNames);
+		DataSet tupleDs = env
+				.fromCollection(Collections.singleton(new Row(2)), rowTypeInfo);
+
+		tupleDs.maxBy(0);
+	}
+
+	/**
+	 * Validates that no ClassCastException happens
+	 * should not fail e.g. like in FLINK-8255.
+	 */
+	@Test(expected = InvalidProgramException.class)
+	public void testMaxByRowTypeInfoKeyFieldsForUnsortedGrouping() {
+		final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+
+		TypeInformation[] types = new TypeInformation[]{Types.INT, Types.INT};
+
+		String[] fieldNames = new String[]{"id", "value"};
+		RowTypeInfo rowTypeInfo = new RowTypeInfo(types, fieldNames);
+
+		UnsortedGrouping groupDs = env.fromCollection(Collections.singleton(new Row(2)), rowTypeInfo).groupBy(0);
+
+		groupDs.maxBy(1);
 	}
 
 	/**
@@ -224,5 +271,4 @@ public class MaxByOperatorTest {
 			return myInt + "," + myLong + "," + myString;
 		}
 	}
-
 }

@@ -18,16 +18,15 @@
 
 package org.apache.flink.streaming.connectors.nifi;
 
-import org.apache.flink.api.common.functions.StoppableFunction;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunction;
+
 import org.apache.nifi.remote.Transaction;
 import org.apache.nifi.remote.TransferDirection;
 import org.apache.nifi.remote.client.SiteToSiteClient;
 import org.apache.nifi.remote.client.SiteToSiteClientConfig;
 import org.apache.nifi.remote.protocol.DataPacket;
 import org.apache.nifi.stream.io.StreamUtils;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,7 +39,7 @@ import java.util.Map;
  * A source that pulls data from Apache NiFi using the NiFi Site-to-Site client. This source
  * produces NiFiDataPackets which encapsulate the content and attributes of a NiFi FlowFile.
  */
-public class NiFiSource extends RichParallelSourceFunction<NiFiDataPacket> implements StoppableFunction{
+public class NiFiSource extends RichParallelSourceFunction<NiFiDataPacket> {
 
 	private static final long serialVersionUID = 1L;
 
@@ -146,10 +145,5 @@ public class NiFiSource extends RichParallelSourceFunction<NiFiDataPacket> imple
 	public void close() throws Exception {
 		super.close();
 		client.close();
-	}
-
-	@Override
-	public void stop() {
-		this.isRunning = false;
 	}
 }

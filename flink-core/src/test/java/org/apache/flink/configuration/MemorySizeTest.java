@@ -24,7 +24,13 @@ import org.junit.Test;
 
 import java.io.IOException;
 
-import static org.junit.Assert.*;
+import static org.apache.flink.configuration.MemorySize.MemoryUnit.MEGA_BYTES;
+import static org.hamcrest.CoreMatchers.is;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.fail;
+
 /**
  * Tests for the {@link MemorySize} class.
  */
@@ -32,7 +38,7 @@ public class MemorySizeTest {
 
 	@Test
 	public void testUnitConversion() {
-		final MemorySize zero = new MemorySize(0);
+		final MemorySize zero = MemorySize.ZERO;
 		assertEquals(0, zero.getBytes());
 		assertEquals(0, zero.getKibiBytes());
 		assertEquals(0, zero.getMebiBytes());
@@ -161,7 +167,7 @@ public class MemorySizeTest {
 			fail("exception expected");
 		} catch (IllegalArgumentException ignored) {}
 
-		// brank
+		// blank
 		try {
 			MemorySize.parseBytes("     ");
 			fail("exception expected");
@@ -185,7 +191,7 @@ public class MemorySizeTest {
 			fail("exception expected");
 		} catch (IllegalArgumentException ignored) {}
 
-		// negavive number
+		// negative number
 		try {
 			MemorySize.parseBytes("-100 bytes");
 			fail("exception expected");
@@ -200,5 +206,44 @@ public class MemorySizeTest {
 	@Test(expected = IllegalArgumentException.class)
 	public void testParseNumberTimeUnitOverflow() {
 		MemorySize.parseBytes("100000000000000 tb");
+	}
+
+	@Test
+	public void testParseWithDefaultUnit() {
+		assertEquals(7, MemorySize.parse("7", MEGA_BYTES).getMebiBytes());
+		assertNotEquals(7, MemorySize.parse("7340032", MEGA_BYTES));
+		assertEquals(7, MemorySize.parse("7m", MEGA_BYTES).getMebiBytes());
+		assertEquals(7168, MemorySize.parse("7", MEGA_BYTES).getKibiBytes());
+		assertEquals(7168, MemorySize.parse("7m", MEGA_BYTES).getKibiBytes());
+		assertEquals(7, MemorySize.parse("7 m", MEGA_BYTES).getMebiBytes());
+		assertEquals(7, MemorySize.parse("7mb", MEGA_BYTES).getMebiBytes());
+		assertEquals(7, MemorySize.parse("7 mb", MEGA_BYTES).getMebiBytes());
+		assertEquals(7, MemorySize.parse("7mebibytes", MEGA_BYTES).getMebiBytes());
+		assertEquals(7, MemorySize.parse("7 mebibytes", MEGA_BYTES).getMebiBytes());
+	}
+
+	@Test
+	public void testDivideByLong() {
+		final MemorySize memory = new MemorySize(100L);
+		assertThat(memory.divide(23), is(new MemorySize(4L)));
+	}
+
+	@Test(expected = IllegalArgumentException.class)
+	public void testDivideByNegativeLong() {
+		final MemorySize memory = new MemorySize(100L);
+		memory.divide(-23L);
+	}
+
+	@Test
+	public void testToHumanReadableString() {
+		assertThat(new MemorySize(0L).toHumanReadableString(), is("0 bytes"));
+		assertThat(new MemorySize(1L).toHumanReadableString(), is("1 bytes"));
+		assertThat(new MemorySize(1024L).toHumanReadableString(), is("1024 bytes"));
+		assertThat(new MemorySize(1025L).toHumanReadableString(), is("1.001kb (1025 bytes)"));
+		assertThat(new MemorySize(1536L).toHumanReadableString(), is("1.500kb (1536 bytes)"));
+		assertThat(new MemorySize(1_000_000L).toHumanReadableString(), is("976.563kb (1000000 bytes)"));
+		assertThat(new MemorySize(1_000_000_000L).toHumanReadableString(), is("953.674mb (1000000000 bytes)"));
+		assertThat(new MemorySize(1_000_000_000_000L).toHumanReadableString(), is("931.323gb (1000000000000 bytes)"));
+		assertThat(new MemorySize(1_000_000_000_000_000L).toHumanReadableString(), is("909.495tb (1000000000000000 bytes)"));
 	}
 }

@@ -18,8 +18,6 @@
 
 package org.apache.flink.api.java.utils;
 
-import org.apache.flink.annotation.PublicEvolving;
-
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -28,8 +26,11 @@ import java.util.Set;
 
 /**
  * Internal representation of a parameter passed to a user defined function.
+ *
+ * @deprecated These classes will be dropped in the next version. Use {@link ParameterTool} or a third-party
+ *             command line parsing library instead.
  */
-@PublicEvolving
+@Deprecated
 public class Option {
 
 	private String longName;
@@ -58,11 +59,10 @@ public class Option {
 		return this;
 	}
 
-
 	/**
 	 * Define the type of the Option.
 	 *
-	 * @param type - the type which the the value of the Option can be casted to.
+	 * @param type - the type which the value of the Option can be casted to.
 	 * @return the updated Option
 	 */
 	public Option type(OptionType type) {
@@ -73,11 +73,10 @@ public class Option {
 	/**
 	 * Define a default value for the option.
 	 *
-	 * Throws an exception if the list of possible values for the parameter is not empty and the default value passed
-	 * is not in the list.
-	 *
 	 * @param defaultValue - the default value
 	 * @return the updated Option
+	 * @throws RequiredParametersException if the list of possible values for the parameter is not empty and the default
+	 *                                     value passed is not in the list.
 	 */
 	public Option defaultValue(String defaultValue) throws RequiredParametersException {
 		if (this.choices.isEmpty()) {

@@ -23,6 +23,7 @@ import org.apache.flink.core.fs.FSDataInputStream;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.Optional;
 
 import static junit.framework.TestCase.assertFalse;
 import static org.junit.Assert.assertEquals;
@@ -82,7 +83,7 @@ public class SharedStateRegistryTest {
 	}
 
 	/**
-	 * Validate that unregister an unexisted key will throw exception
+	 * Validate that unregister a nonexistent key will throw exception
 	 */
 	@Test(expected = IllegalStateException.class)
 	public void testUnregisterWithUnexistedKey() {
@@ -124,6 +125,11 @@ public class SharedStateRegistryTest {
 		@Override
 		public FSDataInputStream openInputStream() throws IOException {
 			throw new UnsupportedOperationException();
+		}
+
+		@Override
+		public Optional<byte[]> asBytesIfInMemory() {
+			return Optional.empty();
 		}
 
 		public boolean isDiscarded() {

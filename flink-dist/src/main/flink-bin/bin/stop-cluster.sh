@@ -23,7 +23,7 @@ bin=`cd "$bin"; pwd`
 . "$bin"/config.sh
 
 # Stop TaskManager instance(s)
-TMSlaves stop
+TMWorkers stop
 
 # Stop JobManager instance(s)
 shopt -s nocasematch
@@ -31,11 +31,17 @@ if [[ $HIGH_AVAILABILITY == "zookeeper" ]]; then
     # HA Mode
     readMasters
 
-    for master in ${MASTERS[@]}; do
-        ssh -n $FLINK_SSH_OPTS $master -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/jobmanager.sh\" stop &"
-    done
+    if [ ${MASTERS_ALL_LOCALHOST} = true ] ; then
+        for master in ${MASTERS[@]}; do
+            "$FLINK_BIN_DIR"/jobmanager.sh stop
+        done
+    else
+        for master in ${MASTERS[@]}; do
+            ssh -n $FLINK_SSH_OPTS $master -- "nohup /bin/bash -l \"${FLINK_BIN_DIR}/jobmanager.sh\" stop &"
+        done
+    fi
 
 else
-	  "$FLINK_BIN_DIR"/jobmanager.sh stop
+    "$FLINK_BIN_DIR"/jobmanager.sh stop
 fi
 shopt -u nocasematch

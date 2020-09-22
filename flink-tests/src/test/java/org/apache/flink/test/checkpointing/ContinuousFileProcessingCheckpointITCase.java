@@ -19,27 +19,29 @@
 package org.apache.flink.test.checkpointing;
 
 import org.apache.flink.api.common.functions.FlatMapFunction;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
+import org.apache.flink.api.common.io.FilePathFilter;
 import org.apache.flink.api.java.io.TextInputFormat;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.runtime.execution.SuppressRestartsException;
 import org.apache.flink.runtime.state.CheckpointListener;
 import org.apache.flink.streaming.api.checkpoint.ListCheckpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.streaming.api.functions.source.ContinuousFileMonitoringFunction;
-import org.apache.flink.api.common.io.FilePathFilter;
 import org.apache.flink.streaming.api.functions.source.FileProcessingMode;
 import org.apache.flink.test.util.SuccessException;
 import org.apache.flink.util.Collector;
+
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
-import org.junit.AfterClass;
+import org.junit.After;
 import org.junit.Assert;
-import org.junit.BeforeClass;
+import org.junit.AssumptionViolatedException;
+import org.junit.Before;
 
 import java.io.File;
 import java.io.IOException;
@@ -56,11 +58,13 @@ import java.util.Set;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
+/**
+ * Test checkpointing while sourcing a continuous file processor.
+ */
 public class ContinuousFileProcessingCheckpointITCase extends StreamFaultToleranceTestBase {
 
 	private static final int NO_OF_FILES = 5;
 	private static final int LINES_PER_FILE = 150;
-	private static final int NO_OF_RETRIES = 3;
 	private static final long INTERVAL = 100;
 
 	private static File baseDir;
@@ -68,39 +72,35 @@ public class ContinuousFileProcessingCheckpointITCase extends StreamFaultToleran
 	private static String localFsURI;
 	private FileCreator fc;
 
-	private static  Map<Integer, Set<String>> actualCollectedContent = new HashMap<>();
+	private static Map<Integer, Set<String>> actualCollectedContent = new HashMap<>();
 
-	@BeforeClass
-	public static void createHDFS() {
-		try {
-			baseDir = new File("./target/localfs/fs_tests").getAbsoluteFile();
-			FileUtil.fullyDelete(baseDir);
-
-			org.apache.hadoop.conf.Configuration hdConf = new org.apache.hadoop.conf.Configuration();
-
-			localFsURI = "file:///" + baseDir +"/";
-			localFs = new org.apache.hadoop.fs.Path(localFsURI).getFileSystem(hdConf);
-
-		} catch(Throwable e) {
-			e.printStackTrace();
-			Assert.fail("Test failed " + e.getMessage());
+	@Before
+	public void createHDFS() throws IOException {
+		if (failoverStrategy.equals(FailoverStrategy.RestartPipelinedRegionFailoverStrategy)) {
+			// TODO the 'NO_OF_RETRIES' is useless for current RestartPipelinedRegionStrategy,
+			// for this ContinuousFileProcessingCheckpointITCase, using RestartPipelinedRegionStrategy would result in endless running.
+			throw new AssumptionViolatedException("ignored ContinuousFileProcessingCheckpointITCase when using RestartPipelinedRegionStrategy");
 		}
+
+		baseDir = new File("./target/localfs/fs_tests").getAbsoluteFile();
+		FileUtil.fullyDelete(baseDir);
+
+		org.apache.hadoop.conf.Configuration hdConf = new org.apache.hadoop.conf.Configuration();
+
+		localFsURI = "file:///" + baseDir + "/";
+		localFs = new org.apache.hadoop.fs.Path(localFsURI).getFileSystem(hdConf);
 	}
 
-	@AfterClass
-	public static void destroyHDFS() {
-		try {
+	@After
+	public void destroyHDFS() {
+		if (baseDir != null) {
 			FileUtil.fullyDelete(baseDir);
-		} catch (Throwable t) {
-			throw new RuntimeException(t);
 		}
 	}
 
 	@Override
 	public void testProgram(StreamExecutionEnvironment env) {
 
-		// set the restart strategy.
-		env.getConfig().setRestartStrategy(RestartStrategies.fixedDelayRestart(NO_OF_RETRIES, 0));
 		env.enableCheckpointing(10);
 
 		// create and start the file creating thread.
@@ -214,7 +214,7 @@ public class ContinuousFileProcessingCheckpointITCase extends StreamFaultToleran
 			// this is termination
 			if (elementCounter >= NO_OF_FILES * LINES_PER_FILE) {
 				actualCollectedContent = actualContent;
-				throw new SuccessException();
+				throw new SuppressRestartsException(new SuccessException());
 			}
 
 			// add some latency so that we have at least two checkpoint in
@@ -225,15 +225,6 @@ public class ContinuousFileProcessingCheckpointITCase extends StreamFaultToleran
 			// simulate a node failure
 			if (!hasRestoredAfterFailure && successfulCheckpoints >= 2 && elementCounter >= elementsToFailure) {
 				throw new Exception("Task Failure @ elem: " + elementCounter + " / " + elementsToFailure);
-			}
-		}
-
-		@Override
-		public void close() {
-			try {
-				super.close();
-			} catch (Exception e) {
-				e.printStackTrace();
 			}
 		}
 
@@ -254,6 +245,10 @@ public class ContinuousFileProcessingCheckpointITCase extends StreamFaultToleran
 		@Override
 		public void notifyCheckpointComplete(long checkpointId) throws Exception {
 			this.successfulCheckpoints++;
+		}
+
+		@Override
+		public void notifyCheckpointAborted(long checkpointId) {
 		}
 
 		private int getFileIdx(String line) {
@@ -279,7 +274,7 @@ public class ContinuousFileProcessingCheckpointITCase extends StreamFaultToleran
 
 		public void run() {
 			try {
-				for(int i = 0; i < NO_OF_FILES; i++) {
+				for (int i = 0; i < NO_OF_FILES; i++) {
 					Tuple2<org.apache.hadoop.fs.Path, String> tmpFile;
 					long modTime;
 					do {
@@ -338,8 +333,8 @@ public class ContinuousFileProcessingCheckpointITCase extends StreamFaultToleran
 
 		FSDataOutputStream stream = localFs.create(tmp);
 		StringBuilder str = new StringBuilder();
-		for(int i = 0; i < LINES_PER_FILE; i++) {
-			String line = fileIdx +": "+ sampleLine + " " + i +"\n";
+		for (int i = 0; i < LINES_PER_FILE; i++) {
+			String line = fileIdx + ": " + sampleLine + " " + i + "\n";
 			str.append(line);
 			stream.write(line.getBytes(ConfigConstants.DEFAULT_CHARSET));
 		}

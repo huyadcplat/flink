@@ -18,32 +18,23 @@
 
 package org.apache.flink.runtime.metrics;
 
-import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.DelegatingConfiguration;
 import org.apache.flink.configuration.MetricOptions;
 import org.apache.flink.runtime.metrics.scope.ScopeFormats;
+import org.apache.flink.runtime.rpc.akka.AkkaRpcServiceUtils;
 import org.apache.flink.util.Preconditions;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.regex.Pattern;
-
 /**
- * Configuration object for {@link MetricRegistry}.
+ * Configuration object for {@link MetricRegistryImpl}.
  */
 public class MetricRegistryConfiguration {
 
 	private static final Logger LOG = LoggerFactory.getLogger(MetricRegistryConfiguration.class);
 
-	private static volatile MetricRegistryConfiguration DEFAULT_CONFIGURATION;
-
-	// regex pattern to split the defined reporters
-	private static final Pattern splitPattern = Pattern.compile("\\s*,\\s*");
+	private static volatile MetricRegistryConfiguration defaultConfiguration;
 
 	// scope formats for the different components
 	private final ScopeFormats scopeFormats;
@@ -51,17 +42,16 @@ public class MetricRegistryConfiguration {
 	// delimiter for the scope strings
 	private final char delimiter;
 
-	// contains for every configured reporter its name and the configuration object
-	private final List<Tuple2<String, Configuration>> reporterConfigurations;
+	private final long queryServiceMessageSizeLimit;
 
 	public MetricRegistryConfiguration(
 		ScopeFormats scopeFormats,
 		char delimiter,
-		List<Tuple2<String, Configuration>> reporterConfigurations) {
+		long queryServiceMessageSizeLimit) {
 
 		this.scopeFormats = Preconditions.checkNotNull(scopeFormats);
 		this.delimiter = delimiter;
-		this.reporterConfigurations = Preconditions.checkNotNull(reporterConfigurations);
+		this.queryServiceMessageSizeLimit = queryServiceMessageSizeLimit;
 	}
 
 	// ------------------------------------------------------------------------
@@ -76,8 +66,8 @@ public class MetricRegistryConfiguration {
 		return delimiter;
 	}
 
-	public List<Tuple2<String, Configuration>> getReporterConfigurations() {
-		return reporterConfigurations;
+	public long getQueryServiceMessageSizeLimit() {
+		return queryServiceMessageSizeLimit;
 	}
 
 	// ------------------------------------------------------------------------
@@ -93,10 +83,10 @@ public class MetricRegistryConfiguration {
 	public static MetricRegistryConfiguration fromConfiguration(Configuration configuration) {
 		ScopeFormats scopeFormats;
 		try {
-			scopeFormats = createScopeConfig(configuration);
+			scopeFormats = ScopeFormats.fromConfig(configuration);
 		} catch (Exception e) {
 			LOG.warn("Failed to parse scope format, using default scope formats", e);
-			scopeFormats = new ScopeFormats();
+			scopeFormats = ScopeFormats.fromConfig(new Configuration());
 		}
 
 		char delim;
@@ -107,56 +97,25 @@ public class MetricRegistryConfiguration {
 			delim = '.';
 		}
 
-		final String definedReporters = configuration.getString(MetricOptions.REPORTERS_LIST);
-		List<Tuple2<String, Configuration>> reporterConfigurations;
+		final long maximumFrameSize = AkkaRpcServiceUtils.extractMaximumFramesize(configuration);
 
-		if (definedReporters == null) {
-			reporterConfigurations = Collections.emptyList();
-		} else {
-			String[] namedReporters = splitPattern.split(definedReporters);
+		// padding to account for serialization overhead
+		final long messageSizeLimitPadding = 256;
 
-			reporterConfigurations = new ArrayList<>(namedReporters.length);
-
-			for (String namedReporter: namedReporters) {
-				DelegatingConfiguration delegatingConfiguration = new DelegatingConfiguration(
-					configuration,
-					ConfigConstants.METRICS_REPORTER_PREFIX + namedReporter + '.');
-
-				reporterConfigurations.add(Tuple2.of(namedReporter, (Configuration) delegatingConfiguration));
-			}
-		}
-
-		return new MetricRegistryConfiguration(scopeFormats, delim, reporterConfigurations);
-	}
-
-	/**
-	 *	Create the scope formats from the given {@link Configuration}.
-	 *
-	 * @param configuration to extract the scope formats from
-	 * @return Scope formats extracted from the given configuration
-	 */
-	static ScopeFormats createScopeConfig(Configuration configuration) {
-		String jmFormat = configuration.getString(MetricOptions.SCOPE_NAMING_JM);
-		String jmJobFormat = configuration.getString(MetricOptions.SCOPE_NAMING_JM_JOB);
-		String tmFormat = configuration.getString(MetricOptions.SCOPE_NAMING_TM);
-		String tmJobFormat = configuration.getString(MetricOptions.SCOPE_NAMING_TM_JOB);
-		String taskFormat = configuration.getString(MetricOptions.SCOPE_NAMING_TASK);
-		String operatorFormat = configuration.getString(MetricOptions.SCOPE_NAMING_OPERATOR);
-
-		return new ScopeFormats(jmFormat, jmJobFormat, tmFormat, tmJobFormat, taskFormat, operatorFormat);
+		return new MetricRegistryConfiguration(scopeFormats, delim, maximumFrameSize - messageSizeLimitPadding);
 	}
 
 	public static MetricRegistryConfiguration defaultMetricRegistryConfiguration() {
 		// create the default metric registry configuration only once
-		if (DEFAULT_CONFIGURATION == null) {
+		if (defaultConfiguration == null) {
 			synchronized (MetricRegistryConfiguration.class) {
-				if (DEFAULT_CONFIGURATION == null) {
-					DEFAULT_CONFIGURATION = fromConfiguration(new Configuration());
+				if (defaultConfiguration == null) {
+					defaultConfiguration = fromConfiguration(new Configuration());
 				}
 			}
 		}
 
-		return DEFAULT_CONFIGURATION;
+		return defaultConfiguration;
 	}
 
 }

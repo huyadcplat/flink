@@ -15,16 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.flink.streaming.connectors.fs;
 
+package org.apache.flink.streaming.connectors.fs;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.typeutils.InputTypeConfigurable;
 import org.apache.flink.api.java.typeutils.TupleTypeInfoBase;
-import org.apache.flink.runtime.fs.hdfs.HadoopFileSystem;
 import org.apache.flink.streaming.connectors.fs.bucketing.BucketingSink;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -44,6 +44,7 @@ import java.io.IOException;
  * @param <K> The type of the first tuple field.
  * @param <V> The type of the second tuple field.
  */
+@Deprecated
 public class SequenceFileWriter<K extends Writable, V extends Writable> extends StreamWriterBase<Tuple2<K, V>> implements InputTypeConfigurable {
 	private static final long serialVersionUID = 1L;
 
@@ -77,6 +78,15 @@ public class SequenceFileWriter<K extends Writable, V extends Writable> extends 
 		this.compressionType = compressionType;
 	}
 
+	protected SequenceFileWriter(SequenceFileWriter<K, V> other) {
+		super(other);
+
+		this.compressionCodecName = other.compressionCodecName;
+		this.compressionType = other.compressionType;
+		this.keyClass = other.keyClass;
+		this.valueClass = other.valueClass;
+	}
+
 	@Override
 	public void open(FileSystem fs, Path path) throws IOException {
 		super.open(fs, path);
@@ -88,8 +98,8 @@ public class SequenceFileWriter<K extends Writable, V extends Writable> extends 
 		}
 
 		CompressionCodec codec = null;
-		
-		Configuration conf = HadoopFileSystem.getHadoopConfiguration();
+
+		Configuration conf = fs.getConf();
 
 		if (!compressionCodecName.equals("None")) {
 			CompressionCodecFactory codecFactory = new CompressionCodecFactory(conf);
@@ -142,10 +152,23 @@ public class SequenceFileWriter<K extends Writable, V extends Writable> extends 
 	}
 
 	@Override
-	public Writer<Tuple2<K, V>> duplicate() {
-		SequenceFileWriter<K, V> result = new SequenceFileWriter<>(compressionCodecName, compressionType);
-		result.keyClass = keyClass;
-		result.valueClass = valueClass;
-		return result;
+	public SequenceFileWriter<K, V> duplicate() {
+		return new SequenceFileWriter<>(this);
+	}
+
+	String getCompressionCodecName() {
+		return compressionCodecName;
+	}
+
+	SequenceFile.CompressionType getCompressionType() {
+		return compressionType;
+	}
+
+	Class<K> getKeyClass() {
+		return keyClass;
+	}
+
+	Class<V> getValueClass() {
+		return valueClass;
 	}
 }

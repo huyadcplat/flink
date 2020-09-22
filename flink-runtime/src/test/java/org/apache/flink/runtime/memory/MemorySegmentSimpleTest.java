@@ -18,26 +18,28 @@
 
 package org.apache.flink.runtime.memory;
 
+import org.apache.flink.core.memory.MemorySegment;
+import org.apache.flink.core.memory.MemorySegmentFactory;
+import org.apache.flink.runtime.operators.testutils.DummyInvokable;
+
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.nio.ByteBuffer;
+import java.util.Random;
+
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import java.nio.ByteBuffer;
-import java.util.Random;
-
-import org.apache.flink.core.memory.MemorySegmentFactory;
-import org.apache.flink.core.memory.MemoryType;
-import org.apache.flink.runtime.operators.testutils.DummyInvokable;
-import org.apache.flink.core.memory.MemorySegment;
-
-import org.junit.Assert;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
-
+/**
+ * Test reading and writing primitive types to {@link MemorySegment}.
+ */
 public class MemorySegmentSimpleTest {
-	
+
 	public static final long RANDOM_SEED = 643196033469871L;
 
 	public static final int MANAGED_MEMORY_SIZE = 1024 * 1024 * 16;
@@ -53,7 +55,11 @@ public class MemorySegmentSimpleTest {
 	@Before
 	public void setUp() throws Exception{
 		try {
-			this.manager = new MemoryManager(MANAGED_MEMORY_SIZE, 1, PAGE_SIZE, MemoryType.HEAP, true);
+			this.manager = MemoryManagerBuilder
+				.newBuilder()
+				.setMemorySize(MANAGED_MEMORY_SIZE)
+				.setPageSize(PAGE_SIZE)
+				.build();
 			this.segment = manager.allocatePages(new DummyInvokable(), 1).get(0);
 			this.random = new Random(RANDOM_SEED);
 		} catch (Exception e) {
@@ -67,7 +73,7 @@ public class MemorySegmentSimpleTest {
 		this.manager.release(this.segment);
 		this.random = null;
 		this.segment = null;
-		
+
 		if (!this.manager.verifyEmpty()) {
 			Assert.fail("Not all memory has been properly released.");
 		}
@@ -430,7 +436,7 @@ public class MemorySegmentSimpleTest {
 				assertEquals(random.nextLong(), segment.getLong(i));
 			}
 		}
-		
+
 		// test unaligned offsets
 		{
 			final long seed = random.nextLong();
@@ -440,7 +446,7 @@ public class MemorySegmentSimpleTest {
 				long value = random.nextLong();
 				segment.putLong(offset, value);
 			}
-			
+
 			random.setSeed(seed);
 			for (int offset = 0; offset < PAGE_SIZE - 8; offset += random.nextInt(24) + 8) {
 				long shouldValue = random.nextLong();
@@ -547,22 +553,22 @@ public class MemorySegmentSimpleTest {
 			}
 		}
 	}
-	
+
 	@Test
 	public void testByteBufferWrapping() {
 		try {
 			MemorySegment seg = MemorySegmentFactory.allocateUnpooledSegment(1024);
-			
+
 			ByteBuffer buf1 = seg.wrap(13, 47);
 			assertEquals(13, buf1.position());
 			assertEquals(60, buf1.limit());
 			assertEquals(47, buf1.remaining());
-			
+
 			ByteBuffer buf2 = seg.wrap(500, 267);
 			assertEquals(500, buf2.position());
 			assertEquals(767, buf2.limit());
 			assertEquals(267, buf2.remaining());
-			
+
 			ByteBuffer buf3 = seg.wrap(0, 1024);
 			assertEquals(0, buf3.position());
 			assertEquals(1024, buf3.limit());

@@ -15,12 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.cep.pattern.conditions;
+
+import org.apache.flink.annotation.Internal;
 
 /**
  * Utility class containing an {@link IterativeCondition} that always returns
  * {@code true} and one that always returns {@code false}.
  */
+@Internal
 public class BooleanConditions {
 
 	/**

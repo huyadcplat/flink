@@ -23,59 +23,66 @@ import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.TaskInfo;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.core.memory.MemorySegmentFactory;
 import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
 import org.apache.flink.runtime.broadcast.BroadcastVariableManager;
 import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
-import org.apache.flink.runtime.checkpoint.SubtaskState;
+import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
+import org.apache.flink.runtime.externalresource.ExternalResourceInfoProvider;
 import org.apache.flink.runtime.io.disk.iomanager.IOManager;
-import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
-import org.apache.flink.runtime.io.network.api.serialization.AdaptiveSpanningRecordDeserializer;
-import org.apache.flink.runtime.io.network.api.serialization.RecordDeserializer;
+import org.apache.flink.runtime.io.network.TaskEventDispatcher;
+import org.apache.flink.runtime.io.network.api.writer.RecordCollectingResultPartitionWriter;
 import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
-import org.apache.flink.runtime.io.network.buffer.Buffer;
-import org.apache.flink.runtime.io.network.buffer.BufferProvider;
-import org.apache.flink.runtime.io.network.buffer.BufferRecycler;
+import org.apache.flink.runtime.io.network.partition.consumer.IndexedInputGate;
 import org.apache.flink.runtime.io.network.partition.consumer.InputGate;
 import org.apache.flink.runtime.io.network.partition.consumer.IteratorWrappingTestSingleInputGate;
+import org.apache.flink.runtime.io.network.util.TestPooledBufferProvider;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.InputSplitProvider;
+import org.apache.flink.runtime.jobgraph.tasks.TaskOperatorEventGateway;
 import org.apache.flink.runtime.memory.MemoryManager;
 import org.apache.flink.runtime.metrics.groups.TaskMetricGroup;
 import org.apache.flink.runtime.query.KvStateRegistry;
 import org.apache.flink.runtime.query.TaskKvStateRegistry;
+import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
+import org.apache.flink.runtime.state.TaskStateManager;
+import org.apache.flink.runtime.taskexecutor.GlobalAggregateManager;
+import org.apache.flink.runtime.taskmanager.NoOpTaskOperatorEventGateway;
 import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
-import org.apache.flink.runtime.util.TestingTaskManagerRuntimeInfo;
 import org.apache.flink.types.Record;
 import org.apache.flink.util.MutableObjectIterator;
-
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
+import org.apache.flink.util.Preconditions;
+import org.apache.flink.util.UserCodeClassLoader;
 
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Future;
 
+import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.apache.flink.util.Preconditions.checkNotNull;
+import static org.apache.flink.util.Preconditions.checkState;
 import static org.junit.Assert.fail;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyInt;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
-public class MockEnvironment implements Environment {
-	
+/**
+ * IMPORTANT! Remember to close environment after usage!
+ */
+public class MockEnvironment implements Environment, AutoCloseable {
+
 	private final TaskInfo taskInfo;
-	
+
 	private final ExecutionConfig executionConfig;
 
 	private final MemoryManager memManager;
 
 	private final IOManager ioManager;
+
+	private final TaskStateManager taskStateManager;
+
+	private final GlobalAggregateManager aggregateManager;
 
 	private final InputSplitProvider inputSplitProvider;
 
@@ -83,60 +90,102 @@ public class MockEnvironment implements Environment {
 
 	private final Configuration taskConfiguration;
 
-	private final List<InputGate> inputs;
+	private final List<IndexedInputGate> inputs;
 
 	private final List<ResultPartitionWriter> outputs;
 
-	private final JobID jobID = new JobID();
+	private final JobID jobID;
+
+	private final JobVertexID jobVertexID;
+
+	private final ExecutionAttemptID executionAttemptID;
+
+	private final TaskManagerRuntimeInfo taskManagerRuntimeInfo;
 
 	private final BroadcastVariableManager bcVarManager = new BroadcastVariableManager();
 
 	private final AccumulatorRegistry accumulatorRegistry;
 
-	private final TaskKvStateRegistry kvStateRegistry;
+	private final TaskKvStateRegistry taskKvStateRegistry;
+
+	private final KvStateRegistry kvStateRegistry;
 
 	private final int bufferSize;
 
-	public MockEnvironment(String taskName, long memorySize, MockInputSplitProvider inputSplitProvider, int bufferSize) {
-		this(taskName, memorySize, inputSplitProvider, bufferSize, new Configuration(), new ExecutionConfig());
+	private final UserCodeClassLoader userCodeClassLoader;
+
+	private final TaskEventDispatcher taskEventDispatcher = new TaskEventDispatcher();
+
+	private Optional<Class<? extends Throwable>> expectedExternalFailureCause = Optional.empty();
+
+	private Optional<? extends Throwable> actualExternalFailureCause = Optional.empty();
+
+	private final TaskMetricGroup taskMetricGroup;
+
+	private final ExternalResourceInfoProvider externalResourceInfoProvider;
+
+	public static MockEnvironmentBuilder builder() {
+		return new MockEnvironmentBuilder();
 	}
 
-	public MockEnvironment(String taskName, long memorySize, MockInputSplitProvider inputSplitProvider, int bufferSize, Configuration taskConfiguration, ExecutionConfig executionConfig) {
-		this(taskName, memorySize, inputSplitProvider, bufferSize, taskConfiguration, executionConfig, 1, 1, 0);
-	}
-
-	public MockEnvironment(
+	protected MockEnvironment(
+			JobID jobID,
+			JobVertexID jobVertexID,
 			String taskName,
-			long memorySize,
 			MockInputSplitProvider inputSplitProvider,
 			int bufferSize,
 			Configuration taskConfiguration,
 			ExecutionConfig executionConfig,
+			IOManager ioManager,
+			TaskStateManager taskStateManager,
+			GlobalAggregateManager aggregateManager,
 			int maxParallelism,
 			int parallelism,
-			int subtaskIndex) {
+			int subtaskIndex,
+			UserCodeClassLoader userCodeClassLoader,
+			TaskMetricGroup taskMetricGroup,
+			TaskManagerRuntimeInfo taskManagerRuntimeInfo,
+			MemoryManager memManager,
+			ExternalResourceInfoProvider externalResourceInfoProvider) {
+
+		this.jobID = jobID;
+		this.jobVertexID = jobVertexID;
+
 		this.taskInfo = new TaskInfo(taskName, maxParallelism, subtaskIndex, parallelism, 0);
 		this.jobConfiguration = new Configuration();
 		this.taskConfiguration = taskConfiguration;
-		this.inputs = new LinkedList<InputGate>();
+		this.inputs = new LinkedList<>();
 		this.outputs = new LinkedList<ResultPartitionWriter>();
+		this.executionAttemptID = new ExecutionAttemptID();
 
-		this.memManager = new MemoryManager(memorySize, 1);
-		this.ioManager = new IOManagerAsync();
+		this.memManager = memManager;
+		this.ioManager = ioManager;
+		this.taskManagerRuntimeInfo = taskManagerRuntimeInfo;
+
 		this.executionConfig = executionConfig;
 		this.inputSplitProvider = inputSplitProvider;
 		this.bufferSize = bufferSize;
 
 		this.accumulatorRegistry = new AccumulatorRegistry(jobID, getExecutionId());
 
-		KvStateRegistry registry = new KvStateRegistry();
-		this.kvStateRegistry = registry.createTaskRegistry(jobID, getJobVertexId());
-	}
+		this.kvStateRegistry = new KvStateRegistry();
+		this.taskKvStateRegistry = kvStateRegistry.createTaskRegistry(jobID, getJobVertexId());
 
+		this.userCodeClassLoader = Preconditions.checkNotNull(userCodeClassLoader);
+		this.taskStateManager = Preconditions.checkNotNull(taskStateManager);
+		this.aggregateManager = Preconditions.checkNotNull(aggregateManager);
+
+		this.taskMetricGroup = taskMetricGroup;
+
+		this.externalResourceInfoProvider = Preconditions.checkNotNull(externalResourceInfoProvider);
+	}
 
 	public IteratorWrappingTestSingleInputGate<Record> addInput(MutableObjectIterator<Record> inputIterator) {
 		try {
-			final IteratorWrappingTestSingleInputGate<Record> reader = new IteratorWrappingTestSingleInputGate<Record>(bufferSize, Record.class, inputIterator);
+			final IteratorWrappingTestSingleInputGate<Record> reader = new IteratorWrappingTestSingleInputGate<Record>(bufferSize,
+				inputs.size(),
+				inputIterator,
+				Record.class);
 
 			inputs.add(reader.getInputGate());
 
@@ -147,59 +196,22 @@ public class MockEnvironment implements Environment {
 		}
 	}
 
+	public void addInputs(List<IndexedInputGate> gates) {
+		inputs.addAll(gates);
+	}
+
 	public void addOutput(final List<Record> outputList) {
 		try {
-			// The record-oriented writers wrap the buffer writer. We mock it
-			// to collect the returned buffers and deserialize the content to
-			// the output list
-			BufferProvider mockBufferProvider = mock(BufferProvider.class);
-			when(mockBufferProvider.requestBufferBlocking()).thenAnswer(new Answer<Buffer>() {
-
-				@Override
-				public Buffer answer(InvocationOnMock invocationOnMock) throws Throwable {
-					return new Buffer(MemorySegmentFactory.allocateUnpooledSegment(bufferSize), mock(BufferRecycler.class));
-				}
-			});
-
-			ResultPartitionWriter mockWriter = mock(ResultPartitionWriter.class);
-			when(mockWriter.getNumberOfOutputChannels()).thenReturn(1);
-			when(mockWriter.getBufferProvider()).thenReturn(mockBufferProvider);
-
-			final Record record = new Record();
-			final RecordDeserializer<Record> deserializer = new AdaptiveSpanningRecordDeserializer<Record>();
-
-			// Add records from the buffer to the output list
-			doAnswer(new Answer<Void>() {
-
-				@Override
-				public Void answer(InvocationOnMock invocationOnMock) throws Throwable {
-					Buffer buffer = (Buffer) invocationOnMock.getArguments()[0];
-
-					deserializer.setNextBuffer(buffer);
-
-					while (deserializer.hasUnfinishedData()) {
-						RecordDeserializer.DeserializationResult result = deserializer.getNextRecord(record);
-
-						if (result.isFullRecord()) {
-							outputList.add(record.createCopy());
-						}
-
-						if (result == RecordDeserializer.DeserializationResult.LAST_RECORD_FROM_BUFFER
-								|| result == RecordDeserializer.DeserializationResult.PARTIAL_RECORD) {
-							break;
-						}
-					}
-
-					return null;
-				}
-			}).when(mockWriter).writeBuffer(any(Buffer.class), anyInt());
-
-			outputs.add(mockWriter);
+			outputs.add(new RecordCollectingResultPartitionWriter(outputList, new TestPooledBufferProvider(Integer.MAX_VALUE)));
 		}
 		catch (Throwable t) {
 			t.printStackTrace();
 			fail(t.getMessage());
 		}
+	}
+
+	public void addOutputs(List<ResultPartitionWriter> writers) {
+		outputs.addAll(writers);
 	}
 
 	@Override
@@ -234,12 +246,12 @@ public class MockEnvironment implements Environment {
 
 	@Override
 	public TaskManagerRuntimeInfo getTaskManagerInfo() {
-		return new TestingTaskManagerRuntimeInfo();
+		return this.taskManagerRuntimeInfo;
 	}
 
 	@Override
 	public TaskMetricGroup getMetricGroup() {
-		return new UnregisteredTaskMetricsGroup();
+		return taskMetricGroup;
 	}
 
 	@Override
@@ -252,9 +264,13 @@ public class MockEnvironment implements Environment {
 		return taskInfo;
 	}
 
+	public KvStateRegistry getKvStateRegistry() {
+		return kvStateRegistry;
+	}
+
 	@Override
-	public ClassLoader getUserClassLoader() {
-		return getClass().getClassLoader();
+	public UserCodeClassLoader getUserCodeClassLoader() {
+		return userCodeClassLoader;
 	}
 
 	@Override
@@ -273,30 +289,43 @@ public class MockEnvironment implements Environment {
 	}
 
 	@Override
-	public InputGate getInputGate(int index) {
+	public IndexedInputGate getInputGate(int index) {
 		return inputs.get(index);
 	}
 
 	@Override
-	public InputGate[] getAllInputGates() {
-		InputGate[] gates = new InputGate[inputs.size()];
-		inputs.toArray(gates);
-		return gates;
+	public IndexedInputGate[] getAllInputGates() {
+		return inputs.toArray(new IndexedInputGate[0]);
+	}
+
+	@Override
+	public TaskEventDispatcher getTaskEventDispatcher() {
+		return taskEventDispatcher;
 	}
 
 	@Override
 	public JobVertexID getJobVertexId() {
-		return new JobVertexID(new byte[16]);
+		return jobVertexID;
 	}
 
 	@Override
 	public ExecutionAttemptID getExecutionId() {
-		return new ExecutionAttemptID(0L, 0L);
+		return executionAttemptID;
 	}
 
 	@Override
 	public BroadcastVariableManager getBroadcastVariableManager() {
 		return this.bcVarManager;
+	}
+
+	@Override
+	public TaskStateManager getTaskStateManager() {
+		return taskStateManager;
+	}
+
+	@Override
+	public GlobalAggregateManager getGlobalAggregateManager() {
+		return aggregateManager;
 	}
 
 	@Override
@@ -306,7 +335,12 @@ public class MockEnvironment implements Environment {
 
 	@Override
 	public TaskKvStateRegistry getTaskKvStateRegistry() {
-		return kvStateRegistry;
+		return taskKvStateRegistry;
+	}
+
+	@Override
+	public ExternalResourceInfoProvider getExternalResourceInfoProvider() {
+		return externalResourceInfoProvider;
 	}
 
 	@Override
@@ -315,17 +349,46 @@ public class MockEnvironment implements Environment {
 	}
 
 	@Override
-	public void acknowledgeCheckpoint(long checkpointId, CheckpointMetrics checkpointMetrics, SubtaskState subtaskState) {
+	public void acknowledgeCheckpoint(long checkpointId, CheckpointMetrics checkpointMetrics, TaskStateSnapshot subtaskState) {
 		throw new UnsupportedOperationException();
 	}
 
 	@Override
 	public void declineCheckpoint(long checkpointId, Throwable cause) {
-		throw new UnsupportedOperationException();
+		throw new UnsupportedOperationException(cause);
+	}
+
+	@Override
+	public TaskOperatorEventGateway getOperatorCoordinatorEventGateway() {
+		return new NoOpTaskOperatorEventGateway();
 	}
 
 	@Override
 	public void failExternally(Throwable cause) {
-		throw new UnsupportedOperationException("MockEnvironment does not support external task failure.");
+		if (!expectedExternalFailureCause.isPresent()) {
+			throw new UnsupportedOperationException("MockEnvironment does not support external task failure.");
+		}
+		checkArgument(expectedExternalFailureCause.get().isInstance(checkNotNull(cause)));
+		checkState(!actualExternalFailureCause.isPresent());
+		actualExternalFailureCause = Optional.of(cause);
+	}
+
+	@Override
+	public void close() throws Exception {
+		// close() method should be idempotent and calling memManager.verifyEmpty() will throw after it was shutdown.
+		if (!memManager.isShutdown()) {
+			checkState(memManager.verifyEmpty(), "Memory Manager managed memory was not completely freed.");
+		}
+
+		memManager.shutdown();
+		ioManager.close();
+	}
+
+	public void setExpectedExternalFailureCause(Class<? extends Throwable> expectedThrowableClass) {
+		this.expectedExternalFailureCause = Optional.of(expectedThrowableClass);
+	}
+
+	public Optional<? extends Throwable> getActualExternalFailureCause() {
+		return actualExternalFailureCause;
 	}
 }

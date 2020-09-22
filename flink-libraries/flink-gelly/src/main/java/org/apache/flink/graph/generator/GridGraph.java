@@ -39,7 +39,7 @@ import java.util.List;
  * @see <a href="http://mathworld.wolfram.com/GridGraph.html">Grid Graph at Wolfram MathWorld</a>
  */
 public class GridGraph
-extends AbstractGraphGenerator<LongValue, NullValue, NullValue> {
+extends GraphGeneratorBase<LongValue, NullValue, NullValue> {
 
 	// Required to create the DataSource
 	private final ExecutionEnvironment env;
@@ -71,7 +71,7 @@ extends AbstractGraphGenerator<LongValue, NullValue, NullValue> {
 	public GridGraph addDimension(long size, boolean wrapEndpoints) {
 		Preconditions.checkArgument(size >= 2, "Dimension size must be at least 2");
 
-		vertexCount *= size;
+		vertexCount = Math.multiplyExact(vertexCount, size);
 
 		// prevent duplicate edges
 		if (size == 2) {

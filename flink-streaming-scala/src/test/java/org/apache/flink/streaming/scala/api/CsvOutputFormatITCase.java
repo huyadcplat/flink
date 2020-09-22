@@ -17,38 +17,32 @@
 
 package org.apache.flink.streaming.scala.api;
 
-import org.apache.flink.api.common.functions.FlatMapFunction;
-import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.streaming.api.scala.OutputFormatTestPrograms;
-import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase;
 import org.apache.flink.test.testdata.WordCountData;
 import org.apache.flink.test.util.AbstractTestBase;
-import org.apache.flink.util.Collector;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.io.File;
-import static org.junit.Assert.*;
 
+import static org.apache.flink.util.ExceptionUtils.findThrowableWithMessage;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
-public class CsvOutputFormatITCase extends StreamingMultipleProgramsTestBase  {
+/**
+ * IT cases for the {@link org.apache.flink.api.java.io.CsvOutputFormat}.
+ */
+public class CsvOutputFormatITCase extends AbstractTestBase {
 
 	protected String resultPath;
 
-	public AbstractTestBase fileInfo = new AbstractTestBase(new Configuration()) {
-		@Override
-		public void startCluster() throws Exception {
-			super.startCluster();
-		}
-	};
-
 	@Before
 	public void createFile() throws Exception {
-		File f = fileInfo.createAndRegisterTempFile("result");
-		resultPath = f.toURI().toString();
+		File resultFile = createAndRegisterTempFile("result");
+		resultPath = resultFile.toURI().toString();
 	}
 
 	@Test
@@ -83,7 +77,7 @@ public class CsvOutputFormatITCase extends StreamingMultipleProgramsTestBase  {
 			OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath, FileSystem.WriteMode.NO_OVERWRITE);
 			fail("File should exist.");
 		} catch (Exception e) {
-			assertTrue(e.getCause().getMessage().contains("File already exists"));
+			assertTrue(findThrowableWithMessage(e, "File already exists").isPresent());
 		}
 	}
 
@@ -94,7 +88,7 @@ public class CsvOutputFormatITCase extends StreamingMultipleProgramsTestBase  {
 			OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath, FileSystem.WriteMode.NO_OVERWRITE);
 			fail("File should exist");
 		} catch (Exception e) {
-			assertTrue(e.getCause().getMessage().contains("File already exists"));
+			assertTrue(findThrowableWithMessage(e, "File already exists").isPresent());
 		}
 	}
 
@@ -105,7 +99,7 @@ public class CsvOutputFormatITCase extends StreamingMultipleProgramsTestBase  {
 			OutputFormatTestPrograms.wordCountToCsv(WordCountData.TEXT, resultPath, FileSystem.WriteMode.NO_OVERWRITE, "\n", ",");
 			fail("File should exist.");
 		} catch (Exception e) {
-			assertTrue(e.getCause().getMessage().contains("File already exists"));
+			assertTrue(findThrowableWithMessage(e, "File already exists").isPresent());
 		}
 	}
 
@@ -113,26 +107,6 @@ public class CsvOutputFormatITCase extends StreamingMultipleProgramsTestBase  {
 	public void closeFile() throws Exception {
 		compareResultsByLinesInMemory(WordCountData.STREAMING_COUNTS_AS_TUPLES
 				.replaceAll("[\\\\(\\\\)]", ""), resultPath);
-		fileInfo.stopCluster();
 	}
-
-	public static final class Tokenizer implements FlatMapFunction<String, Tuple2<String, Integer>> {
-		private static final long serialVersionUID = 1L;
-
-		@Override
-		public void flatMap(String value, Collector<Tuple2<String, Integer>> out)
-				throws Exception {
-			// normalize and split the line
-			String[] tokens = value.toLowerCase().split("\\W+");
-
-			// emit the pairs
-			for (String token : tokens) {
-				if (token.length() > 0) {
-					out.collect(new Tuple2<>(token, 1));
-				}
-			}
-		}
-	}
-
 }
 

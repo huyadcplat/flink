@@ -26,20 +26,31 @@ import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
 import org.apache.flink.runtime.broadcast.BroadcastVariableManager;
 import org.apache.flink.runtime.checkpoint.CheckpointMetrics;
-import org.apache.flink.runtime.checkpoint.SubtaskState;
+import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
+import org.apache.flink.runtime.externalresource.ExternalResourceInfoProvider;
 import org.apache.flink.runtime.io.disk.iomanager.IOManager;
+import org.apache.flink.runtime.io.network.TaskEventDispatcher;
 import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
-import org.apache.flink.runtime.io.network.partition.consumer.InputGate;
+import org.apache.flink.runtime.io.network.partition.consumer.IndexedInputGate;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.tasks.InputSplitProvider;
+import org.apache.flink.runtime.jobgraph.tasks.TaskOperatorEventGateway;
 import org.apache.flink.runtime.memory.MemoryManager;
 import org.apache.flink.runtime.metrics.groups.TaskMetricGroup;
+import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.query.KvStateRegistry;
 import org.apache.flink.runtime.query.TaskKvStateRegistry;
+import org.apache.flink.runtime.state.TaskStateManager;
+import org.apache.flink.runtime.state.TestTaskStateManager;
+import org.apache.flink.runtime.taskexecutor.GlobalAggregateManager;
+import org.apache.flink.runtime.taskexecutor.TestGlobalAggregateManager;
+import org.apache.flink.runtime.taskmanager.NoOpTaskOperatorEventGateway;
 import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
 import org.apache.flink.runtime.util.TestingTaskManagerRuntimeInfo;
+import org.apache.flink.runtime.util.TestingUserCodeClassLoader;
+import org.apache.flink.util.UserCodeClassLoader;
 
 import java.util.Collections;
 import java.util.Map;
@@ -53,9 +64,28 @@ public class DummyEnvironment implements Environment {
 	private final ExecutionConfig executionConfig = new ExecutionConfig();
 	private final TaskInfo taskInfo;
 	private KvStateRegistry kvStateRegistry = new KvStateRegistry();
+	private TaskStateManager taskStateManager;
+	private final GlobalAggregateManager aggregateManager;
+	private final AccumulatorRegistry accumulatorRegistry = new AccumulatorRegistry(jobId, executionId);
+	private UserCodeClassLoader userClassLoader;
+
+	public DummyEnvironment() {
+		this("Test Job", 1, 0, 1);
+	}
+
+	public DummyEnvironment(ClassLoader userClassLoader) {
+		this("Test Job", 1, 0, 1);
+		this.userClassLoader = TestingUserCodeClassLoader.newBuilder().setClassLoader(userClassLoader).build();
+	}
 
 	public DummyEnvironment(String taskName, int numSubTasks, int subTaskIndex) {
-		this.taskInfo = new TaskInfo(taskName, numSubTasks, subTaskIndex, numSubTasks, 0);
+		this(taskName, numSubTasks, subTaskIndex, numSubTasks);
+	}
+
+	public DummyEnvironment(String taskName, int numSubTasks, int subTaskIndex, int maxParallelism) {
+		this.taskInfo = new TaskInfo(taskName, maxParallelism, subTaskIndex, numSubTasks, 0);
+		this.taskStateManager = new TestTaskStateManager();
+		this.aggregateManager = new TestGlobalAggregateManager();
 	}
 
 	public void setKvStateRegistry(KvStateRegistry kvStateRegistry) {
@@ -98,7 +128,7 @@ public class DummyEnvironment implements Environment {
 
 	@Override
 	public TaskMetricGroup getMetricGroup() {
-		return new UnregisteredTaskMetricsGroup();
+		return UnregisteredMetricGroups.createUnregisteredTaskMetricGroup();
 	}
 
 	@Override
@@ -127,8 +157,12 @@ public class DummyEnvironment implements Environment {
 	}
 
 	@Override
-	public ClassLoader getUserClassLoader() {
-		return getClass().getClassLoader();
+	public UserCodeClassLoader getUserCodeClassLoader() {
+		if (userClassLoader == null) {
+			return TestingUserCodeClassLoader.newBuilder().build();
+		} else {
+			return userClassLoader;
+		}
 	}
 
 	@Override
@@ -142,8 +176,18 @@ public class DummyEnvironment implements Environment {
 	}
 
 	@Override
+	public TaskStateManager getTaskStateManager() {
+		return taskStateManager;
+	}
+
+	@Override
+	public GlobalAggregateManager getGlobalAggregateManager() {
+		return aggregateManager;
+	}
+
+	@Override
 	public AccumulatorRegistry getAccumulatorRegistry() {
-		return null;
+		return accumulatorRegistry;
 	}
 
 	@Override
@@ -156,7 +200,12 @@ public class DummyEnvironment implements Environment {
 	}
 
 	@Override
-	public void acknowledgeCheckpoint(long checkpointId, CheckpointMetrics checkpointMetrics, SubtaskState subtaskState) {
+	public ExternalResourceInfoProvider getExternalResourceInfoProvider() {
+		return ExternalResourceInfoProvider.NO_EXTERNAL_RESOURCES;
+	}
+
+	@Override
+	public void acknowledgeCheckpoint(long checkpointId, CheckpointMetrics checkpointMetrics, TaskStateSnapshot subtaskState) {
 	}
 
 	@Override
@@ -180,13 +229,25 @@ public class DummyEnvironment implements Environment {
 	}
 
 	@Override
-	public InputGate getInputGate(int index) {
+	public IndexedInputGate getInputGate(int index) {
 		return null;
 	}
 
 	@Override
-	public InputGate[] getAllInputGates() {
+	public IndexedInputGate[] getAllInputGates() {
 		return null;
 	}
 
+	@Override
+	public TaskEventDispatcher getTaskEventDispatcher() {
+		throw new UnsupportedOperationException();
+	}
+	public void setTaskStateManager(TaskStateManager taskStateManager) {
+		this.taskStateManager = taskStateManager;
+	}
+
+	@Override
+	public TaskOperatorEventGateway getOperatorCoordinatorEventGateway() {
+		return new NoOpTaskOperatorEventGateway();
+	}
 }

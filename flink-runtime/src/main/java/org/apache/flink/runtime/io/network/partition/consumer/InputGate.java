@@ -18,17 +18,29 @@
 
 package org.apache.flink.runtime.io.network.partition.consumer;
 
+import org.apache.flink.runtime.checkpoint.channel.ChannelStateReader;
+import org.apache.flink.runtime.checkpoint.channel.InputChannelInfo;
 import org.apache.flink.runtime.event.TaskEvent;
+import org.apache.flink.runtime.io.PullingAsyncDataInput;
+import org.apache.flink.runtime.io.network.buffer.BufferReceivedListener;
 
 import java.io.IOException;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * An input gate consumes one or more partitions of a single produced intermediate result.
  *
- * <p> Each intermediate result is partitioned over its producing parallel subtasks; each of these
+ * <p>Each intermediate result is partitioned over its producing parallel subtasks; each of these
  * partitions is furthermore partitioned into one or more subpartitions.
  *
- * <p> As an example, consider a map-reduce program, where the map operator produces data and the
+ * <p>As an example, consider a map-reduce program, where the map operator produces data and the
  * reduce operator consumes the produced data.
  *
  * <pre>{@code
@@ -37,7 +49,7 @@ import java.io.IOException;
  * +-----+              +---------------------+              +--------+
  * }</pre>
  *
- * <p> When deploying such a program in parallel, the intermediate result will be partitioned over its
+ * <p>When deploying such a program in parallel, the intermediate result will be partitioned over its
  * producing parallel subtasks; each of these partitions is furthermore partitioned into one or more
  * subpartitions.
  *
@@ -58,25 +70,96 @@ import java.io.IOException;
  *               +-----------------------------------------+
  * }</pre>
  *
- * <p> In the above example, two map subtasks produce the intermediate result in parallel, resulting
+ * <p>In the above example, two map subtasks produce the intermediate result in parallel, resulting
  * in two partitions (Partition 1 and 2). Each of these partitions is further partitioned into two
  * subpartitions -- one for each parallel reduce subtask. As shown in the Figure, each reduce task
  * will have an input gate attached to it. This will provide its input, which will consist of one
  * subpartition from each partition of the intermediate result.
  */
-public interface InputGate {
+public abstract class InputGate implements PullingAsyncDataInput<BufferOrEvent>, AutoCloseable {
 
-	int getNumberOfInputChannels();
+	protected final AvailabilityHelper availabilityHelper = new AvailabilityHelper();
 
-	boolean isFinished();
+	public abstract int getNumberOfInputChannels();
 
-	void requestPartitions() throws IOException, InterruptedException;
+	public abstract boolean isFinished();
 
-	BufferOrEvent getNextBufferOrEvent() throws IOException, InterruptedException;
+	/**
+	 * Blocking call waiting for next {@link BufferOrEvent}.
+	 *
+	 * <p>Note: It should be guaranteed that the previous returned buffer has been recycled before getting next one.
+	 *
+	 * @return {@code Optional.empty()} if {@link #isFinished()} returns true.
+	 */
+	public abstract Optional<BufferOrEvent> getNext() throws IOException, InterruptedException;
 
-	void sendTaskEvent(TaskEvent event) throws IOException;
+	/**
+	 * Poll the {@link BufferOrEvent}.
+	 *
+	 * <p>Note: It should be guaranteed that the previous returned buffer has been recycled before polling next one.
+	 *
+	 * @return {@code Optional.empty()} if there is no data to return or if {@link #isFinished()} returns true.
+	 */
+	public abstract Optional<BufferOrEvent> pollNext() throws IOException, InterruptedException;
 
-	void registerListener(InputGateListener listener);
+	public abstract void sendTaskEvent(TaskEvent event) throws IOException;
 
-	int getPageSize();
+	/**
+	 * @return a future that is completed if there are more records available. If there are more
+	 * records available immediately, {@link #AVAILABLE} should be returned. Previously returned
+	 * not completed futures should become completed once there are more records available.
+	 */
+	@Override
+	public CompletableFuture<?> getAvailableFuture() {
+		return availabilityHelper.getAvailableFuture();
+	}
+
+	public abstract void resumeConsumption(int channelIndex) throws IOException;
+
+	/**
+	 * Returns the channel of this gate.
+	 */
+	public abstract InputChannel getChannel(int channelIndex);
+
+	/**
+	 * Returns the channel infos of this gate.
+	 */
+	public List<InputChannelInfo> getChannelInfos() {
+		return IntStream.range(0, getNumberOfInputChannels())
+			.mapToObj(index -> getChannel(index).getChannelInfo())
+			.collect(Collectors.toList());
+	}
+
+	/**
+	 * Simple pojo for INPUT, DATA and moreAvailable.
+	 */
+	protected static class InputWithData<INPUT, DATA> {
+		protected final INPUT input;
+		protected final DATA data;
+		protected final boolean moreAvailable;
+
+		InputWithData(INPUT input, DATA data, boolean moreAvailable) {
+			this.input = checkNotNull(input);
+			this.data = checkNotNull(data);
+			this.moreAvailable = moreAvailable;
+		}
+	}
+
+	/**
+	 * Setup gate, potentially heavy-weight, blocking operation comparing to just creation.
+	 */
+	public abstract void setup() throws IOException;
+
+	/**
+	 * Reads the previous unaligned checkpoint states before requesting partition data.
+	 *
+	 * @param executor the dedicated executor for performing this action for all the internal channels.
+	 * @param reader the dedicated reader for unspilling the respective channel state from snapshots.
+	 * @return the future indicates whether the recovered states have already been drained or not.
+	 */
+	public abstract CompletableFuture<?> readRecoveredState(ExecutorService executor, ChannelStateReader reader) throws IOException;
+
+	public abstract void requestPartitions() throws IOException;
+
+	public abstract void registerBufferReceivedListener(BufferReceivedListener listener);
 }

@@ -21,6 +21,7 @@ package org.apache.flink.runtime.checkpoint;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 
 import javax.annotation.Nullable;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -45,7 +46,7 @@ public class PendingCheckpointStats extends AbstractCheckpointStats {
 	private static final long serialVersionUID = -973959257699390327L;
 
 	/** Tracker callback when the pending checkpoint is finalized or aborted. */
-	private transient final CheckpointStatsTracker.PendingCheckpointStatsCallback trackerCallback;
+	private final transient CheckpointStatsTracker.PendingCheckpointStatsCallback trackerCallback;
 
 	/** The current number of acknowledged subtasks. */
 	private volatile int currentNumAcknowledgedSubtasks;
@@ -53,10 +54,7 @@ public class PendingCheckpointStats extends AbstractCheckpointStats {
 	/** Current checkpoint state size over all collected subtasks. */
 	private volatile long currentStateSize;
 
-	/** Current buffered bytes during alignment over all collected subtasks. */
-	private volatile long currentAlignmentBuffered;
-
-	/** Stats of the latest acknowleged subtask. */
+	/** Stats of the latest acknowledged subtask. */
 	private volatile SubtaskStateStats latestAcknowledgedSubtask;
 
 	/**
@@ -97,11 +95,6 @@ public class PendingCheckpointStats extends AbstractCheckpointStats {
 	}
 
 	@Override
-	public long getAlignmentBuffered() {
-		return currentAlignmentBuffered;
-	}
-
-	@Override
 	public SubtaskStateStats getLatestAcknowledgedSubtaskStats() {
 		return latestAcknowledgedSubtask;
 	}
@@ -126,11 +119,6 @@ public class PendingCheckpointStats extends AbstractCheckpointStats {
 
 			currentStateSize += subtask.getStateSize();
 
-			long alignmentBuffered = subtask.getAlignmentBuffered();
-			if (alignmentBuffered > 0) {
-				currentAlignmentBuffered += alignmentBuffered;
-			}
-
 			return true;
 		} else {
 			return false;
@@ -140,10 +128,10 @@ public class PendingCheckpointStats extends AbstractCheckpointStats {
 	/**
 	 * Reports a successfully completed pending checkpoint.
 	 *
-	 * @param externalPath Optional external storage path if checkpoint was externalized.
+	 * @param externalPointer Optional external storage path if checkpoint was externalized.
 	 * @return Callback for the {@link CompletedCheckpoint} instance to notify about disposal.
 	 */
-	CompletedCheckpointStats.DiscardCallback reportCompletedCheckpoint(@Nullable String externalPath) {
+	CompletedCheckpointStats.DiscardCallback reportCompletedCheckpoint(String externalPointer) {
 		CompletedCheckpointStats completed = new CompletedCheckpointStats(
 			checkpointId,
 			triggerTimestamp,
@@ -152,9 +140,8 @@ public class PendingCheckpointStats extends AbstractCheckpointStats {
 			new HashMap<>(taskStats),
 			currentNumAcknowledgedSubtasks,
 			currentStateSize,
-			currentAlignmentBuffered,
 			latestAcknowledgedSubtask,
-			externalPath);
+				externalPointer);
 
 		trackerCallback.reportCompletedCheckpoint(completed);
 
@@ -176,7 +163,6 @@ public class PendingCheckpointStats extends AbstractCheckpointStats {
 			new HashMap<>(taskStats),
 			currentNumAcknowledgedSubtasks,
 			currentStateSize,
-			currentAlignmentBuffered,
 			failureTimestamp,
 			latestAcknowledgedSubtask,
 			cause);

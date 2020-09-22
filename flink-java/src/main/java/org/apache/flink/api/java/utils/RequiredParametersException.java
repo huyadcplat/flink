@@ -15,17 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.flink.api.java.utils;
 
-import org.apache.flink.annotation.PublicEvolving;
+package org.apache.flink.api.java.utils;
 
 import java.util.LinkedList;
 import java.util.List;
 
 /**
  * Exception which is thrown if validation of {@link RequiredParameters} fails.
+ *
+ * @deprecated These classes will be dropped in the next version. Use {@link ParameterTool} or a third-party
+ *             command line parsing library instead.
  */
-@PublicEvolving
+@Deprecated
 public class RequiredParametersException extends Exception {
 
 	private List<String> missingArguments;

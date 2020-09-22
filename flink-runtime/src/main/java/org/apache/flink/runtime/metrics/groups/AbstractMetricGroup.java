@@ -30,20 +30,23 @@ import org.apache.flink.metrics.SimpleCounter;
 import org.apache.flink.runtime.metrics.MetricRegistry;
 import org.apache.flink.runtime.metrics.dump.QueryScopeInfo;
 import org.apache.flink.runtime.metrics.scope.ScopeFormat;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * Abstract {@link MetricGroup} that contains key functionality for adding metrics and groups.
- * 
+ *
  * <p><b>IMPORTANT IMPLEMENTATION NOTE</b>
- * 
+ *
  * <p>This class uses locks for adding and removing metrics objects. This is done to
  * prevent resource leaks in the presence of concurrently closing a group and adding
  * metrics and subgroups.
@@ -56,30 +59,29 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * from any metrics reporter and any internal maps. Note that even closed metrics groups
  * return Counters, Gauges, etc to the code, to prevent exceptions in the monitored code.
  * These metrics simply do not get reported any more, when created on a closed group.
- * 
+ *
  * @param <A> The type of the parent MetricGroup
  */
 @Internal
 public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> implements MetricGroup {
 
-	/** shared logger */
-	private static final Logger LOG = LoggerFactory.getLogger(MetricGroup.class);
+	protected static final Logger LOG = LoggerFactory.getLogger(MetricGroup.class);
 
 	// ------------------------------------------------------------------------
 
-	/** The parent group containing this group */
+	/** The parent group containing this group. */
 	protected final A parent;
 
 	/** The map containing all variables and their associated values, lazily computed. */
-	protected volatile Map<String, String> variables;
-	
-	/** The registry that this metrics group belongs to */
+	protected volatile Map<String, String>[] variables;
+
+	/** The registry that this metrics group belongs to. */
 	protected final MetricRegistry registry;
 
-	/** All metrics that are directly contained in this group */
+	/** All metrics that are directly contained in this group. */
 	private final Map<String, Metric> metrics = new HashMap<>();
 
-	/** All metric subgroups of this group */
+	/** All metric subgroups of this group. */
 	private final Map<String, AbstractMetricGroup> groups = new HashMap<>();
 
 	/** The metrics scope represented by this group.
@@ -90,43 +92,75 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 	 * For example: "host-7.taskmanager-2.window_word_count.my-mapper" */
 	private final String[] scopeStrings;
 
-	/** The logical metrics scope represented by this group, as a concatenated string, lazily computed.
+	/** The logical metrics scope represented by this group for each reporter, as a concatenated string, lazily computed.
 	 * For example: "taskmanager.job.task" */
-	private String logicalScopeString;
+	private String[] logicalScopeStrings;
 
 	/** The metrics query service scope represented by this group, lazily computed. */
 	protected QueryScopeInfo queryServiceScopeInfo;
 
-	/** Flag indicating whether this group has been closed */
+	/** Flag indicating whether this group has been closed. */
 	private volatile boolean closed;
 
 	// ------------------------------------------------------------------------
 
+	@SuppressWarnings("unchecked")
 	public AbstractMetricGroup(MetricRegistry registry, String[] scope, A parent) {
 		this.registry = checkNotNull(registry);
 		this.scopeComponents = checkNotNull(scope);
 		this.parent = parent;
-		this.scopeStrings = new String[registry.getReporters() == null ? 0 : registry.getReporters().size()];
+		this.scopeStrings = new String[registry.getNumberReporters()];
+		this.logicalScopeStrings = new String[registry.getNumberReporters()];
+		this.variables = new Map[registry.getNumberReporters() + 1];
 	}
 
+	@Override
 	public Map<String, String> getAllVariables() {
-		if (variables == null) { // avoid synchronization for common case
-			synchronized(this) {
-				if (variables == null) {
-					if (parent != null) {
-						variables = parent.getAllVariables();
-					} else { // this case should only be true for mock groups
-						variables = new HashMap<>();
+		return internalGetAllVariables(0, Collections.emptySet());
+	}
+
+	public Map<String, String> getAllVariables(int reporterIndex, Set<String> excludedVariables) {
+		// offset cache location to account for general cache at position 0
+		reporterIndex += 1;
+		if (reporterIndex < 0 || reporterIndex >= logicalScopeStrings.length) {
+			reporterIndex = 0;
+		}
+		// if no variables are excluded (which is the default!) we re-use the general variables map to save space
+		return internalGetAllVariables(excludedVariables.isEmpty() ? 0 : reporterIndex, excludedVariables);
+	}
+
+	private Map<String, String> internalGetAllVariables(int cachingIndex, Set<String> excludedVariables) {
+		if (variables[cachingIndex] == null) {
+			Map<String, String> tmpVariables = new HashMap<>();
+
+			putVariables(tmpVariables);
+			excludedVariables.forEach(tmpVariables::remove);
+
+			if (parent != null) { // not true for Job-/TaskManagerMetricGroup
+				// explicitly call getAllVariables() to prevent cascading caching operations upstream, to prevent
+				// caching in groups which are never directly passed to reporters
+				for (Map.Entry<String, String> entry : parent.getAllVariables().entrySet()) {
+					if (!excludedVariables.contains(entry.getKey())) {
+						tmpVariables.put(entry.getKey(), entry.getValue());
 					}
 				}
 			}
+			variables[cachingIndex]  = tmpVariables;
 		}
-		return variables;
+		return variables[cachingIndex];
+	}
+
+	/**
+	 * Enters all variables specific to this {@link AbstractMetricGroup} and their associated values into the map.
+	 *
+	 * @param variables map to enter variables and their values into
+	 */
+	protected void putVariables(Map<String, String> variables) {
 	}
 
 	/**
 	 * Returns the logical scope of this group, for example
-	 * {@code "taskmanager.job.task"}
+	 * {@code "taskmanager.job.task"}.
 	 *
 	 * @param filter character filter which is applied to the scope components
 	 * @return logical scope
@@ -137,25 +171,45 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 
 	/**
 	 * Returns the logical scope of this group, for example
-	 * {@code "taskmanager.job.task"}
+	 * {@code "taskmanager.job.task"}.
 	 *
 	 * @param filter character filter which is applied to the scope components
 	 * @return logical scope
 	 */
 	public String getLogicalScope(CharacterFilter filter, char delimiter) {
-		if (logicalScopeString == null) {
-			if (parent == null) {
-				logicalScopeString = getGroupName(filter);
-			} else {
-				logicalScopeString = parent.getLogicalScope(filter, delimiter) + delimiter + getGroupName(filter);
+		return getLogicalScope(filter, delimiter, -1);
+	}
+
+	/**
+	 * Returns the logical scope of this group, for example
+	 * {@code "taskmanager.job.task"}.
+	 *
+	 * @param filter character filter which is applied to the scope components
+	 * @param delimiter delimiter to use for concatenating scope components
+	 * @param reporterIndex index of the reporter
+	 * @return logical scope
+	 */
+	String getLogicalScope(CharacterFilter filter, char delimiter, int reporterIndex) {
+		if (logicalScopeStrings.length == 0 || (reporterIndex < 0 || reporterIndex >= logicalScopeStrings.length)) {
+			return createLogicalScope(filter, delimiter);
+		} else {
+			if (logicalScopeStrings[reporterIndex] == null) {
+				logicalScopeStrings[reporterIndex] = createLogicalScope(filter, delimiter);
 			}
+			return logicalScopeStrings[reporterIndex];
 		}
-		return logicalScopeString;
+	}
+
+	protected String createLogicalScope(CharacterFilter filter, char delimiter) {
+		final String groupName = getGroupName(filter);
+		return parent == null
+			? groupName
+			: parent.getLogicalScope(filter, delimiter) + delimiter + groupName;
 	}
 
 	/**
 	 * Returns the name for this group, meaning what kind of entity it represents, for example "taskmanager".
-	 * 
+	 *
 	 * @param filter character filter which is applied to the name
 	 * @return logical name for this group
 	 */
@@ -163,17 +217,18 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 
 	/**
 	 * Gets the scope as an array of the scope components, for example
-	 * {@code ["host-7", "taskmanager-2", "window_word_count", "my-mapper"]}
-	 * 
-	 * @see #getMetricIdentifier(String) 
+	 * {@code ["host-7", "taskmanager-2", "window_word_count", "my-mapper"]}.
+	 *
+	 * @see #getMetricIdentifier(String)
 	 */
+	@Override
 	public String[] getScopeComponents() {
 		return scopeComponents;
 	}
 
 	/**
 	 * Returns the metric query service scope for this group.
-	 * 
+	 *
 	 * @param filter character filter
 	 * @return query service scope
      */
@@ -194,39 +249,41 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 
 	/**
 	 * Returns the fully qualified metric name, for example
-	 * {@code "host-7.taskmanager-2.window_word_count.my-mapper.metricName"}
-	 * 
+	 * {@code "host-7.taskmanager-2.window_word_count.my-mapper.metricName"}.
+	 *
 	 * @param metricName metric name
 	 * @return fully qualified metric name
 	 */
+	@Override
 	public String getMetricIdentifier(String metricName) {
 		return getMetricIdentifier(metricName, null);
 	}
 
 	/**
 	 * Returns the fully qualified metric name, for example
-	 * {@code "host-7.taskmanager-2.window_word_count.my-mapper.metricName"}
+	 * {@code "host-7.taskmanager-2.window_word_count.my-mapper.metricName"}.
 	 *
 	 * @param metricName metric name
 	 * @param filter character filter which is applied to the scope components if not null.
 	 * @return fully qualified metric name
 	 */
+	@Override
 	public String getMetricIdentifier(String metricName, CharacterFilter filter) {
-		return getMetricIdentifier(metricName, filter, -1);
+		return getMetricIdentifier(metricName, filter, -1, registry.getDelimiter());
 	}
 
 	/**
 	 * Returns the fully qualified metric name using the configured delimiter for the reporter with the given index, for example
-	 * {@code "host-7.taskmanager-2.window_word_count.my-mapper.metricName"}
+	 * {@code "host-7.taskmanager-2.window_word_count.my-mapper.metricName"}.
 	 *
 	 * @param metricName metric name
 	 * @param filter character filter which is applied to the scope components if not null.
 	 * @param reporterIndex index of the reporter whose delimiter should be used
+	 * @param delimiter delimiter to use
 	 * @return fully qualified metric name
 	 */
-	public String getMetricIdentifier(String metricName, CharacterFilter filter, int reporterIndex) {
+	public String getMetricIdentifier(String metricName, CharacterFilter filter, int reporterIndex, char delimiter) {
 		if (scopeStrings.length == 0 || (reporterIndex < 0 || reporterIndex >= scopeStrings.length)) {
-			char delimiter = registry.getDelimiter();
 			String newScopeString;
 			if (filter != null) {
 				newScopeString = ScopeFormat.concat(filter, delimiter, scopeComponents);
@@ -236,7 +293,6 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 			}
 			return newScopeString + delimiter + metricName;
 		} else {
-			char delimiter = registry.getDelimiter(reporterIndex);
 			if (scopeStrings[reporterIndex] == null) {
 				if (filter != null) {
 					scopeStrings[reporterIndex] = ScopeFormat.concat(filter, delimiter, scopeComponents);
@@ -250,7 +306,7 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 			return scopeStrings[reporterIndex] + delimiter + metricName;
 		}
 	}
-	
+
 	// ------------------------------------------------------------------------
 	//  Closing
 	// ------------------------------------------------------------------------
@@ -292,7 +348,7 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 	public Counter counter(String name) {
 		return counter(name, new SimpleCounter());
 	}
-	
+
 	@Override
 	public <C extends Counter> C counter(int name, C counter) {
 		return counter(String.valueOf(name), counter);
@@ -340,7 +396,7 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 	/**
 	 * Adds the given metric to the group and registers it at the registry, if the group
 	 * is not yet closed, and if no metric with the same name has been registered before.
-	 * 
+	 *
 	 * @param name the name to register the metric under
 	 * @param metric the metric to register
 	 */
@@ -352,7 +408,7 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 		// add the metric only if the group is still open
 		synchronized (this) {
 			if (!closed) {
-				// immediately put without a 'contains' check to optimize the common case (no collition)
+				// immediately put without a 'contains' check to optimize the common case (no collision)
 				// collisions are resolved later
 				Metric prior = metrics.put(name, metric);
 
@@ -372,7 +428,7 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 				else {
 					// we had a collision. put back the original value
 					metrics.put(name, prior);
-					
+
 					// we warn here, rather than failing, because metrics are tools that should not fail the
 					// program when used incorrectly
 					LOG.warn("Name collision: Group already contains a Metric with the name '" +
@@ -388,11 +444,20 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 
 	@Override
 	public MetricGroup addGroup(int name) {
-		return addGroup(String.valueOf(name));
+		return addGroup(String.valueOf(name), ChildType.GENERIC);
 	}
 
 	@Override
 	public MetricGroup addGroup(String name) {
+		return addGroup(name, ChildType.GENERIC);
+	}
+
+	@Override
+	public MetricGroup addGroup(String key, String value) {
+		return addGroup(key, ChildType.KEY).addGroup(value, ChildType.VALUE);
+	}
+
+	private AbstractMetricGroup<?> addGroup(String name, ChildType childType) {
 		synchronized (this) {
 			if (!closed) {
 				// adding a group with the same name as a metric creates problems in many reporters/dashboards
@@ -403,7 +468,7 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 							name + "'. Metric might not get properly reported. " + Arrays.toString(scopeComponents));
 				}
 
-				AbstractMetricGroup newGroup = new GenericMetricGroup(registry, this, name);
+				AbstractMetricGroup newGroup = createChildGroup(name, childType);
 				AbstractMetricGroup prior = groups.put(name, newGroup);
 				if (prior == null) {
 					// no prior group with that name
@@ -421,5 +486,26 @@ public abstract class AbstractMetricGroup<A extends AbstractMetricGroup<?>> impl
 				return closedGroup;
 			}
 		}
+	}
+
+	protected GenericMetricGroup createChildGroup(String name, ChildType childType) {
+		switch (childType) {
+			case KEY:
+				return new GenericKeyMetricGroup(registry, this, name);
+			default:
+				return new GenericMetricGroup(registry, this, name);
+		}
+	}
+
+	/**
+	 * Enum for indicating which child group should be created.
+	 * `KEY` is used to create {@link GenericKeyMetricGroup}.
+	 * `VALUE` is used to create {@link GenericValueMetricGroup}.
+	 * `GENERIC` is used to create {@link GenericMetricGroup}.
+	 */
+	protected enum ChildType {
+		KEY,
+		VALUE,
+		GENERIC
 	}
 }

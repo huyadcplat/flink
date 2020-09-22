@@ -30,7 +30,7 @@ import java.util.Map;
  * <p>The state is accessed and modified by user functions, and checkpointed consistently
  * by the system as part of the distributed snapshots.
  *
- * <p>The state is only accessible by functions applied on a KeyedDataStream. The key is
+ * <p>The state is only accessible by functions applied on a {@code KeyedStream}. The key is
  * automatically supplied by the system, so the function always sees the value mapped to the
  * key of the current element. That way, the system can handle stream and state partitioning
  * consistently together.
@@ -60,7 +60,7 @@ public interface MapState<UK, UV> extends State {
 	 * @throws Exception Thrown if the system cannot access the state.
 	 */
 	void put(UK key, UV value) throws Exception;
-	
+
 	/**
 	 * Copies all of the mappings from the given map into the state.
 	 *
@@ -90,19 +90,19 @@ public interface MapState<UK, UV> extends State {
 	boolean contains(UK key) throws Exception;
 
 	/**
-	 * Returns all the mappings in the state
+	 * Returns all the mappings in the state.
 	 *
 	 * @return An iterable view of all the key-value pairs in the state.
-	 * 
+	 *
 	 * @throws Exception Thrown if the system cannot access the state.
 	 */
 	Iterable<Map.Entry<UK, UV>> entries() throws Exception;
-	
+
 	/**
-	 * Returns all the keys in the state
+	 * Returns all the keys in the state.
 	 *
 	 * @return An iterable view of all the keys in the state.
-	 * 
+	 *
 	 * @throws Exception Thrown if the system cannot access the state.
 	 */
 	Iterable<UK> keys() throws Exception;
@@ -111,7 +111,7 @@ public interface MapState<UK, UV> extends State {
 	 * Returns all the values in the state.
 	 *
 	 * @return An iterable view of all the values in the state.
-	 * 
+	 *
 	 * @throws Exception Thrown if the system cannot access the state.
 	 */
 	Iterable<UV> values() throws Exception;
@@ -120,8 +120,17 @@ public interface MapState<UK, UV> extends State {
 	 * Iterates over all the mappings in the state.
 	 *
 	 * @return An iterator over all the mappings in the state
-	 * 
+	 *
 	 * @throws Exception Thrown if the system cannot access the state.
 	 */
 	Iterator<Map.Entry<UK, UV>> iterator() throws Exception;
+
+	/**
+	 * Returns true if this state contains no key-value mappings, otherwise false.
+	 *
+	 * @return True if this state contains no key-value mappings, otherwise false.
+	 *
+	 * @throws Exception Thrown if the system cannot access the state.
+	 */
+	boolean isEmpty() throws Exception;
 }

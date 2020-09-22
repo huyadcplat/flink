@@ -18,18 +18,22 @@
 package org.apache.flink.streaming.connectors.elasticsearch;
 
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.testutils.CheckedThread;
 import org.apache.flink.core.testutils.MultiShotLatch;
 import org.apache.flink.streaming.api.operators.StreamSink;
 import org.apache.flink.streaming.connectors.elasticsearch.util.NoOpFailureHandler;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
+
 import org.elasticsearch.action.ActionRequest;
-import org.elasticsearch.action.ActionResponse;
+import org.elasticsearch.action.DocWriteRequest;
+import org.elasticsearch.action.DocWriteResponse;
 import org.elasticsearch.action.bulk.BulkItemResponse;
 import org.elasticsearch.action.bulk.BulkProcessor;
 import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.action.bulk.BulkResponse;
+import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.Requests;
 import org.junit.Assert;
@@ -41,21 +45,41 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Map;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Suite of tests for {@link ElasticsearchSinkBase}.
  */
 public class ElasticsearchSinkBaseTest {
+
+	/**
+	 * Verifies that the collection given to the sink is not modified.
+	 */
+	@Test
+	public void testCollectionArgumentNotModified() {
+		Map<String, String> userConfig = new HashMap<>();
+		userConfig.put(ElasticsearchSinkBase.CONFIG_KEY_BULK_FLUSH_BACKOFF_DELAY, "1");
+		userConfig.put(ElasticsearchSinkBase.CONFIG_KEY_BULK_FLUSH_BACKOFF_ENABLE, "true");
+		userConfig.put(ElasticsearchSinkBase.CONFIG_KEY_BULK_FLUSH_BACKOFF_RETRIES, "1");
+		userConfig.put(ElasticsearchSinkBase.CONFIG_KEY_BULK_FLUSH_BACKOFF_TYPE, "CONSTANT");
+		userConfig.put(ElasticsearchSinkBase.CONFIG_KEY_BULK_FLUSH_INTERVAL_MS, "1");
+		userConfig.put(ElasticsearchSinkBase.CONFIG_KEY_BULK_FLUSH_MAX_ACTIONS, "1");
+		userConfig.put(ElasticsearchSinkBase.CONFIG_KEY_BULK_FLUSH_MAX_SIZE_MB, "1");
+
+		new DummyElasticsearchSink<>(
+			Collections.unmodifiableMap(userConfig),
+			new SimpleSinkFunction<String>(),
+			new NoOpFailureHandler());
+	}
 
 	/** Tests that any item failure in the listener callbacks is rethrown on an immediately following invoke call. */
 	@Test
@@ -71,7 +95,7 @@ public class ElasticsearchSinkBaseTest {
 		// setup the next bulk request, and its mock item failures
 		sink.setMockItemFailuresListForNextBulkItemResponses(Collections.singletonList(new Exception("artificial failure for record")));
 		testHarness.processElement(new StreamRecord<>("msg"));
-		verify(sink.getMockBulkProcessor(), times(1)).add(any(ActionRequest.class));
+		verify(sink.getMockBulkProcessor(), times(1)).add(any(IndexRequest.class));
 
 		// manually execute the next bulk request
 		sink.manualBulkRequestWithAllPendingRequests();
@@ -103,7 +127,7 @@ public class ElasticsearchSinkBaseTest {
 		// setup the next bulk request, and its mock item failures
 		sink.setMockItemFailuresListForNextBulkItemResponses(Collections.singletonList(new Exception("artificial failure for record")));
 		testHarness.processElement(new StreamRecord<>("msg"));
-		verify(sink.getMockBulkProcessor(), times(1)).add(any(ActionRequest.class));
+		verify(sink.getMockBulkProcessor(), times(1)).add(any(IndexRequest.class));
 
 		// manually execute the next bulk request
 		sink.manualBulkRequestWithAllPendingRequests();
@@ -123,9 +147,9 @@ public class ElasticsearchSinkBaseTest {
 
 	/**
 	 * Tests that any item failure in the listener callbacks due to flushing on an immediately following checkpoint
-	 * is rethrown; we set a timeout because the test will not finish if the logic is broken
+	 * is rethrown; we set a timeout because the test will not finish if the logic is broken.
 	 */
-	@Test(timeout=5000)
+	@Test(timeout = 5000)
 	public void testItemFailureRethrownOnCheckpointAfterFlush() throws Throwable {
 		final DummyElasticsearchSink<String> sink = new DummyElasticsearchSink<>(
 			new HashMap<String, String>(), new SimpleSinkFunction<String>(), new NoOpFailureHandler());
@@ -143,7 +167,7 @@ public class ElasticsearchSinkBaseTest {
 		sink.setMockItemFailuresListForNextBulkItemResponses(mockResponsesList);
 
 		testHarness.processElement(new StreamRecord<>("msg-1"));
-		verify(sink.getMockBulkProcessor(), times(1)).add(any(ActionRequest.class));
+		verify(sink.getMockBulkProcessor(), times(1)).add(any(IndexRequest.class));
 
 		// manually execute the next bulk request (1 request only, thus should succeed)
 		sink.manualBulkRequestWithAllPendingRequests();
@@ -151,7 +175,7 @@ public class ElasticsearchSinkBaseTest {
 		// setup the requests to be flushed in the snapshot
 		testHarness.processElement(new StreamRecord<>("msg-2"));
 		testHarness.processElement(new StreamRecord<>("msg-3"));
-		verify(sink.getMockBulkProcessor(), times(3)).add(any(ActionRequest.class));
+		verify(sink.getMockBulkProcessor(), times(3)).add(any(IndexRequest.class));
 
 		CheckedThread snapshotThread = new CheckedThread() {
 			@Override
@@ -196,7 +220,7 @@ public class ElasticsearchSinkBaseTest {
 		// setup the next bulk request, and let the whole bulk request fail
 		sink.setFailNextBulkRequestCompletely(new Exception("artificial failure for bulk request"));
 		testHarness.processElement(new StreamRecord<>("msg"));
-		verify(sink.getMockBulkProcessor(), times(1)).add(any(ActionRequest.class));
+		verify(sink.getMockBulkProcessor(), times(1)).add(any(IndexRequest.class));
 
 		// manually execute the next bulk request
 		sink.manualBulkRequestWithAllPendingRequests();
@@ -228,7 +252,7 @@ public class ElasticsearchSinkBaseTest {
 		// setup the next bulk request, and let the whole bulk request fail
 		sink.setFailNextBulkRequestCompletely(new Exception("artificial failure for bulk request"));
 		testHarness.processElement(new StreamRecord<>("msg"));
-		verify(sink.getMockBulkProcessor(), times(1)).add(any(ActionRequest.class));
+		verify(sink.getMockBulkProcessor(), times(1)).add(any(IndexRequest.class));
 
 		// manually execute the next bulk request
 		sink.manualBulkRequestWithAllPendingRequests();
@@ -250,7 +274,7 @@ public class ElasticsearchSinkBaseTest {
 	 * Tests that any bulk failure in the listener callbacks due to flushing on an immediately following checkpoint
 	 * is rethrown; we set a timeout because the test will not finish if the logic is broken.
 	 */
-	@Test(timeout=5000)
+	@Test(timeout = 5000)
 	public void testBulkFailureRethrownOnOnCheckpointAfterFlush() throws Throwable {
 		final DummyElasticsearchSink<String> sink = new DummyElasticsearchSink<>(
 			new HashMap<String, String>(), new SimpleSinkFunction<String>(), new NoOpFailureHandler());
@@ -263,7 +287,7 @@ public class ElasticsearchSinkBaseTest {
 		// setup the next bulk request, and let bulk request succeed
 		sink.setMockItemFailuresListForNextBulkItemResponses(Collections.singletonList((Exception) null));
 		testHarness.processElement(new StreamRecord<>("msg-1"));
-		verify(sink.getMockBulkProcessor(), times(1)).add(any(ActionRequest.class));
+		verify(sink.getMockBulkProcessor(), times(1)).add(any(IndexRequest.class));
 
 		// manually execute the next bulk request
 		sink.manualBulkRequestWithAllPendingRequests();
@@ -271,7 +295,7 @@ public class ElasticsearchSinkBaseTest {
 		// setup the requests to be flushed in the snapshot
 		testHarness.processElement(new StreamRecord<>("msg-2"));
 		testHarness.processElement(new StreamRecord<>("msg-3"));
-		verify(sink.getMockBulkProcessor(), times(3)).add(any(ActionRequest.class));
+		verify(sink.getMockBulkProcessor(), times(3)).add(any(IndexRequest.class));
 
 		CheckedThread snapshotThread = new CheckedThread() {
 			@Override
@@ -307,9 +331,9 @@ public class ElasticsearchSinkBaseTest {
 
 	/**
 	 * Tests that the sink correctly waits for pending requests (including re-added requests) on checkpoints;
-	 * we set a timeout because the test will not finish if the logic is broken
+	 * we set a timeout because the test will not finish if the logic is broken.
 	 */
-	@Test(timeout=5000)
+	@Test(timeout = 5000)
 	public void testAtLeastOnceSink() throws Throwable {
 		final DummyElasticsearchSink<String> sink = new DummyElasticsearchSink<>(
 				new HashMap<String, String>(),
@@ -325,7 +349,7 @@ public class ElasticsearchSinkBaseTest {
 		// it contains 1 request, which will fail and re-added to the next bulk request
 		sink.setMockItemFailuresListForNextBulkItemResponses(Collections.singletonList(new Exception("artificial failure for record")));
 		testHarness.processElement(new StreamRecord<>("msg"));
-		verify(sink.getMockBulkProcessor(), times(1)).add(any(ActionRequest.class));
+		verify(sink.getMockBulkProcessor(), times(1)).add(any(IndexRequest.class));
 
 		CheckedThread snapshotThread = new CheckedThread() {
 			@Override
@@ -365,9 +389,9 @@ public class ElasticsearchSinkBaseTest {
 	/**
 	 * This test is meant to assure that testAtLeastOnceSink is valid by testing that if flushing is disabled,
 	 * the snapshot method does indeed finishes without waiting for pending requests;
-	 * we set a timeout because the test will not finish if the logic is broken
+	 * we set a timeout because the test will not finish if the logic is broken.
 	 */
-	@Test(timeout=5000)
+	@Test(timeout = 5000)
 	public void testDoesNotWaitForPendingRequestsIfFlushingDisabled() throws Exception {
 		final DummyElasticsearchSink<String> sink = new DummyElasticsearchSink<>(
 			new HashMap<String, String>(), new SimpleSinkFunction<String>(), new DummyRetryFailureHandler());
@@ -381,7 +405,7 @@ public class ElasticsearchSinkBaseTest {
 		// setup the next bulk request, and let bulk request succeed
 		sink.setMockItemFailuresListForNextBulkItemResponses(Collections.singletonList(new Exception("artificial failure for record")));
 		testHarness.processElement(new StreamRecord<>("msg-1"));
-		verify(sink.getMockBulkProcessor(), times(1)).add(any(ActionRequest.class));
+		verify(sink.getMockBulkProcessor(), times(1)).add(any(IndexRequest.class));
 
 		// the snapshot should not block even though we haven't flushed the bulk request
 		testHarness.snapshot(1L, 1000L);
@@ -389,7 +413,20 @@ public class ElasticsearchSinkBaseTest {
 		testHarness.close();
 	}
 
-	private static class DummyElasticsearchSink<T> extends ElasticsearchSinkBase<T> {
+	@Test
+	public void testOpenAndCloseInSinkFunction() throws Exception {
+		SimpleClosableSinkFunction<String> sinkFunction = new SimpleClosableSinkFunction<>();
+		final DummyElasticsearchSink<String> sink = new DummyElasticsearchSink<>(
+				new HashMap<>(), sinkFunction, new DummyRetryFailureHandler());
+
+		sink.open(mock(Configuration.class));
+		sink.close();
+
+		Assert.assertTrue(sinkFunction.openCalled);
+		Assert.assertTrue(sinkFunction.closeCalled);
+	}
+
+	private static class DummyElasticsearchSink<T> extends ElasticsearchSinkBase<T, Client> {
 
 		private static final long serialVersionUID = 5051907841570096991L;
 
@@ -397,7 +434,7 @@ public class ElasticsearchSinkBaseTest {
 		private transient BulkRequest nextBulkRequest = new BulkRequest();
 		private transient MultiShotLatch flushLatch = new MultiShotLatch();
 
-		private List<? extends Throwable> mockItemFailuresList;
+		private List<? extends Exception> mockItemFailuresList;
 		private Throwable nextBulkFailure;
 
 		public DummyElasticsearchSink(
@@ -409,7 +446,7 @@ public class ElasticsearchSinkBaseTest {
 
 		/**
 		 * This method is used to mimic a scheduled bulk request; we need to do this
-		 * manually because we are mocking the BulkProcessor
+		 * manually because we are mocking the BulkProcessor.
 		 */
 		public void manualBulkRequestWithAllPendingRequests() {
 			flushLatch.trigger(); // let the flush
@@ -419,7 +456,7 @@ public class ElasticsearchSinkBaseTest {
 		/**
 		 * On non-manual flushes, i.e. when flush is called in the snapshot method implementation,
 		 * usages need to explicitly call this to allow the flush to continue. This is useful
-		 * to make sure that specific requests get added to the the next bulk request for flushing.
+		 * to make sure that specific requests get added to the next bulk request for flushing.
 		 */
 		public void continueFlush() {
 			flushLatch.trigger();
@@ -429,10 +466,10 @@ public class ElasticsearchSinkBaseTest {
 		 * Set the list of mock failures to use for the next bulk of item responses. A {@code null}
 		 * means that the response is successful, failed otherwise.
 		 *
-		 * The list is used with corresponding order to the requests in the bulk, i.e. the first
+		 * <p>The list is used with corresponding order to the requests in the bulk, i.e. the first
 		 * request uses the response at index 0, the second requests uses the response at index 1, etc.
 		 */
-		public void setMockItemFailuresListForNextBulkItemResponses(List<? extends Throwable> mockItemFailuresList) {
+		public void setMockItemFailuresListForNextBulkItemResponses(List<? extends Exception> mockItemFailuresList) {
 			this.mockItemFailuresList = mockItemFailuresList;
 		}
 
@@ -457,11 +494,11 @@ public class ElasticsearchSinkBaseTest {
 		protected BulkProcessor buildBulkProcessor(final BulkProcessor.Listener listener) {
 			this.mockBulkProcessor = mock(BulkProcessor.class);
 
-			when(mockBulkProcessor.add(any(ActionRequest.class))).thenAnswer(new Answer<Object>() {
+			when(mockBulkProcessor.add(any(IndexRequest.class))).thenAnswer(new Answer<Object>() {
 				@Override
 				public Object answer(InvocationOnMock invocationOnMock) throws Throwable {
 					// intercept the request and add it to our mock bulk request
-					nextBulkRequest.add(invocationOnMock.getArgumentAt(0, ActionRequest.class));
+					nextBulkRequest.add((IndexRequest) invocationOnMock.getArgument(0));
 
 					return null;
 				}
@@ -484,14 +521,14 @@ public class ElasticsearchSinkBaseTest {
 						if (nextBulkFailure == null) {
 							BulkItemResponse[] mockResponses = new BulkItemResponse[currentBulkRequest.requests().size()];
 							for (int i = 0; i < currentBulkRequest.requests().size(); i++) {
-								Throwable mockItemFailure = mockItemFailuresList.get(i);
+								Exception mockItemFailure = mockItemFailuresList.get(i);
 
 								if (mockItemFailure == null) {
 									// the mock response for the item is success
-									mockResponses[i] = new BulkItemResponse(i, "opType", mock(ActionResponse.class));
+									mockResponses[i] = new BulkItemResponse(i, DocWriteRequest.OpType.INDEX, mock(DocWriteResponse.class));
 								} else {
 									// the mock response for the item is failure
-									mockResponses[i] = new BulkItemResponse(i, "opType", new BulkItemResponse.Failure("index", "type", "id", mockItemFailure));
+									mockResponses[i] = new BulkItemResponse(i, DocWriteRequest.OpType.INDEX, new BulkItemResponse.Failure("index", "type", "id", mockItemFailure));
 								}
 							}
 
@@ -509,13 +546,18 @@ public class ElasticsearchSinkBaseTest {
 		}
 	}
 
-	private static class DummyElasticsearchApiCallBridge implements ElasticsearchApiCallBridge {
+	private static class DummyElasticsearchApiCallBridge implements ElasticsearchApiCallBridge<Client> {
 
 		private static final long serialVersionUID = -4272760730959041699L;
 
 		@Override
 		public Client createClient(Map<String, String> clientConfig) {
 			return mock(Client.class);
+		}
+
+		@Override
+		public BulkProcessor.Builder createBulkProcessorBuilder(Client client, BulkProcessor.Listener listener) {
+			return null;
 		}
 
 		@Nullable
@@ -534,8 +576,8 @@ public class ElasticsearchSinkBaseTest {
 		}
 
 		@Override
-		public void cleanup() {
-			// nothing to cleanup
+		public void verifyClientConnection(Client client) {
+			// no need for this in the test cases here
 		}
 	}
 
@@ -556,6 +598,27 @@ public class ElasticsearchSinkBaseTest {
 					.source(json)
 			);
 		}
+	}
+
+	private static class SimpleClosableSinkFunction<String> implements ElasticsearchSinkFunction<String> {
+
+		private static final long serialVersionUID = 1872065917794006848L;
+
+		private boolean openCalled;
+		private boolean closeCalled;
+
+		@Override
+		public void open() {
+			openCalled = true;
+		}
+
+		@Override
+		public void close() {
+			closeCalled = true;
+		}
+
+		@Override
+		public void process(String element, RuntimeContext ctx, RequestIndexer indexer) {}
 	}
 
 	private static class DummyRetryFailureHandler implements ActionRequestFailureHandler {

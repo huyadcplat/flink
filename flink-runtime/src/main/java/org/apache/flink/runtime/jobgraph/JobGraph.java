@@ -21,29 +21,32 @@ package org.apache.flink.runtime.jobgraph;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.InvalidProgramException;
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.cache.DistributedCache;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.core.fs.FSDataInputStream;
-import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.runtime.blob.BlobClient;
-import org.apache.flink.runtime.blob.BlobKey;
-import org.apache.flink.runtime.instance.ActorGateway;
+import org.apache.flink.runtime.blob.PermanentBlobKey;
 import org.apache.flink.runtime.jobgraph.tasks.JobCheckpointingSettings;
+import org.apache.flink.runtime.jobmanager.scheduler.CoLocationGroupDesc;
+import org.apache.flink.runtime.jobmanager.scheduler.SlotSharingGroup;
+import org.apache.flink.util.InstantiationUtil;
+import org.apache.flink.util.IterableUtils;
 import org.apache.flink.util.SerializedValue;
-import scala.concurrent.duration.FiniteDuration;
 
 import java.io.IOException;
 import java.io.Serializable;
-import java.net.InetSocketAddress;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -71,27 +74,20 @@ public class JobGraph implements Serializable {
 	private final Configuration jobConfiguration = new Configuration();
 
 	/** ID of this job. May be set if specific job id is desired (e.g. session management) */
-	private final JobID jobID;
+	private JobID jobID;
 
 	/** Name of this job. */
 	private final String jobName;
 
-	/** The number of seconds after which the corresponding ExecutionGraph is removed at the
-	 * job manager after it has been executed. */
-	private long sessionTimeout = 0;
-
-	/** flag to enable queued scheduling */
-	private boolean allowQueuedScheduling;
-
-	/** The mode in which the job is scheduled */
+	/** The mode in which the job is scheduled. */
 	private ScheduleMode scheduleMode = ScheduleMode.LAZY_FROM_SOURCES;
 
 	// --- checkpointing ---
 
-	/** Job specific execution config */
+	/** Job specific execution config. */
 	private SerializedValue<ExecutionConfig> serializedExecutionConfig;
 
-	/** The settings for the job checkpoints */
+	/** The settings for the job checkpoints. */
 	private JobCheckpointingSettings snapshotSettings;
 
 	/** Savepoint restore settings. */
@@ -102,8 +98,11 @@ public class JobGraph implements Serializable {
 	/** Set of JAR files required to run this job. */
 	private final List<Path> userJars = new ArrayList<Path>();
 
+	/** Set of custom files required to run this job. */
+	private final Map<String, DistributedCache.DistributedCacheEntry> userArtifacts = new HashMap<>();
+
 	/** Set of blob keys identifying the JAR files required to run this job. */
-	private final List<BlobKey> userJarBlobKeys = new ArrayList<BlobKey>();
+	private final List<PermanentBlobKey> userJarBlobKeys = new ArrayList<>();
 
 	/** List of classpaths required to run this job. */
 	private List<URL> classpaths = Collections.emptyList();
@@ -190,6 +189,13 @@ public class JobGraph implements Serializable {
 	}
 
 	/**
+	 * Sets the ID of the job.
+	 */
+	public void setJobID(JobID jobID) {
+		this.jobID = jobID;
+	}
+
+	/**
 	 * Returns the name assigned to the job graph.
 	 *
 	 * @return the name assigned to the job graph
@@ -209,38 +215,12 @@ public class JobGraph implements Serializable {
 	}
 
 	/**
-	 * Returns the {@link ExecutionConfig}
+	 * Returns the {@link ExecutionConfig}.
 	 *
 	 * @return ExecutionConfig
 	 */
 	public SerializedValue<ExecutionConfig> getSerializedExecutionConfig() {
 		return serializedExecutionConfig;
-	}
-
-	/**
-	 * Gets the timeout after which the corresponding ExecutionGraph is removed at the
-	 * job manager after it has been executed.
-	 * @return a timeout as a long in seconds.
-	 */
-	public long getSessionTimeout() {
-		return sessionTimeout;
-	}
-
-	/**
-	 * Sets the timeout of the session in seconds. The timeout specifies how long a job will be kept
-	 * in the job manager after it finishes.
-	 * @param sessionTimeout The timeout in seconds
-	 */
-	public void setSessionTimeout(long sessionTimeout) {
-		this.sessionTimeout = sessionTimeout;
-	}
-
-	public void setAllowQueuedScheduling(boolean allowQueuedScheduling) {
-		this.allowQueuedScheduling = allowQueuedScheduling;
-	}
-
-	public boolean getAllowQueuedScheduling() {
-		return allowQueuedScheduling;
 	}
 
 	public void setScheduleMode(ScheduleMode scheduleMode) {
@@ -271,7 +251,7 @@ public class JobGraph implements Serializable {
 	 * Sets the execution config. This method eagerly serialized the ExecutionConfig for future RPC
 	 * transport. Further modification of the referenced ExecutionConfig object will not affect
 	 * this serialized copy.
-	 * 
+	 *
 	 * @param executionConfig The ExecutionConfig to be serialized.
 	 * @throws IOException Thrown if the serialization of the ExecutionConfig fails
 	 */
@@ -325,11 +305,32 @@ public class JobGraph implements Serializable {
 		return this.taskVertices.size();
 	}
 
+	public Set<SlotSharingGroup> getSlotSharingGroups() {
+		final Set<SlotSharingGroup> slotSharingGroups = IterableUtils
+			.toStream(getVertices())
+			.map(JobVertex::getSlotSharingGroup)
+			.collect(Collectors.toSet());
+		return Collections.unmodifiableSet(slotSharingGroups);
+	}
+
+	public Set<CoLocationGroupDesc> getCoLocationGroupDescriptors() {
+		// invoke distinct() on CoLocationGroup first to avoid creating
+		// multiple CoLocationGroupDec from one CoLocationGroup
+		final Set<CoLocationGroupDesc> coLocationGroups = IterableUtils
+			.toStream(getVertices())
+			.map(JobVertex::getCoLocationGroup)
+			.filter(Objects::nonNull)
+			.distinct()
+			.map(CoLocationGroupDesc::from)
+			.collect(Collectors.toSet());
+		return Collections.unmodifiableSet(coLocationGroups);
+	}
+
 	/**
 	 * Sets the settings for asynchronous snapshots. A value of {@code null} means that
 	 * snapshotting is not enabled.
 	 *
-	 * @param settings The snapshot settings, or null, to disable snapshotting.
+	 * @param settings The snapshot settings
 	 */
 	public void setSnapshotSettings(JobCheckpointingSettings settings) {
 		this.snapshotSettings = settings;
@@ -339,10 +340,26 @@ public class JobGraph implements Serializable {
 	 * Gets the settings for asynchronous snapshots. This method returns null, when
 	 * checkpointing is not enabled.
 	 *
-	 * @return The snapshot settings, or null, if checkpointing is not enabled.
+	 * @return The snapshot settings
 	 */
 	public JobCheckpointingSettings getCheckpointingSettings() {
 		return snapshotSettings;
+	}
+
+	/**
+	 * Checks if the checkpointing was enabled for this job graph.
+	 *
+	 * @return true if checkpointing enabled
+	 */
+	public boolean isCheckpointingEnabled() {
+
+		if (snapshotSettings == null) {
+			return false;
+		}
+
+		long checkpointInterval = snapshotSettings.getCheckpointCoordinatorConfiguration().getCheckpointInterval();
+		return checkpointInterval > 0 &&
+			checkpointInterval < Long.MAX_VALUE;
 	}
 
 	/**
@@ -484,6 +501,22 @@ public class JobGraph implements Serializable {
 	}
 
 	/**
+	 * Adds the given jar files to the {@link JobGraph} via {@link JobGraph#addJar}.
+	 *
+	 * @param jarFilesToAttach a list of the {@link URL URLs} of the jar files to attach to the jobgraph.
+	 * @throws RuntimeException if a jar URL is not valid.
+	 */
+	public void addJars(final List<URL> jarFilesToAttach) {
+		for (URL jar : jarFilesToAttach) {
+			try {
+				addJar(new Path(jar.toURI()));
+			} catch (URISyntaxException e) {
+				throw new RuntimeException("URL is invalid. This should not happen.", e);
+			}
+		}
+	}
+
+	/**
 	 * Gets the list of assigned user jar paths.
 	 *
 	 * @return The list of assigned user jar paths
@@ -493,12 +526,35 @@ public class JobGraph implements Serializable {
 	}
 
 	/**
+	 * Adds the path of a custom file required to run the job on a task manager.
+	 *
+	 * @param name a name under which this artifact will be accessible through {@link DistributedCache}
+	 * @param file path of a custom file required to run the job on a task manager
+	 */
+	public void addUserArtifact(String name, DistributedCache.DistributedCacheEntry file) {
+		if (file == null) {
+			throw new IllegalArgumentException();
+		}
+
+		userArtifacts.putIfAbsent(name, file);
+	}
+
+	/**
+	 * Gets the list of assigned user jar paths.
+	 *
+	 * @return The list of assigned user jar paths
+	 */
+	public Map<String, DistributedCache.DistributedCacheEntry> getUserArtifacts() {
+		return userArtifacts;
+	}
+
+	/**
 	 * Adds the BLOB referenced by the key to the JobGraph's dependencies.
 	 *
 	 * @param key
 	 *        path of the JAR file required to run the job on a task manager
 	 */
-	public void addBlob(BlobKey key) {
+	public void addUserJarBlobKey(PermanentBlobKey key) {
 		if (key == null) {
 			throw new IllegalArgumentException();
 		}
@@ -522,76 +578,43 @@ public class JobGraph implements Serializable {
 	 *
 	 * @return set of BLOB keys referring to the JAR files required to run this job
 	 */
-	public List<BlobKey> getUserJarBlobKeys() {
+	public List<PermanentBlobKey> getUserJarBlobKeys() {
 		return this.userJarBlobKeys;
-	}
-
-	/**
-	 * Uploads the previously added user jar file to the job manager through the job manager's BLOB server.
-	 *
-	 * @param serverAddress
-	 *        the network address of the BLOB server
-	 * @param blobClientConfig
-	 *        the blob client configuration
-	 * @throws IOException
-	 *         thrown if an I/O error occurs during the upload
-	 */
-	public void uploadRequiredJarFiles(InetSocketAddress serverAddress,
-			Configuration blobClientConfig) throws IOException {
-		if (this.userJars.isEmpty()) {
-			return;
-		}
-
-		BlobClient bc = null;
-		try {
-			bc = new BlobClient(serverAddress, blobClientConfig);
-
-			for (final Path jar : this.userJars) {
-
-				final FileSystem fs = jar.getFileSystem();
-				FSDataInputStream is = null;
-				try {
-					is = fs.open(jar);
-					final BlobKey key = bc.put(is);
-					this.userJarBlobKeys.add(key);
-				}
-				finally {
-					if (is != null) {
-						is.close();
-					}
-				}
-			}
-		}
-		finally {
-			if (bc != null) {
-				bc.close();
-			}
-		}
-	}
-
-	/**
-	 * Uploads the previously added user JAR files to the job manager through
-	 * the job manager's BLOB server. The respective port is retrieved from the
-	 * JobManager. This function issues a blocking call.
-	 *
-	 * @param jobManager JobManager actor gateway
-	 * @param askTimeout Ask timeout
-	 * @param blobClientConfig the blob client configuration
-	 * @throws IOException Thrown, if the file upload to the JobManager failed.
-	 */
-	public void uploadUserJars(ActorGateway jobManager, FiniteDuration askTimeout,
-			Configuration blobClientConfig) throws IOException {
-		List<BlobKey> blobKeys = BlobClient.uploadJarFiles(jobManager, askTimeout, blobClientConfig, userJars);
-
-		for (BlobKey blobKey : blobKeys) {
-			if (!userJarBlobKeys.contains(blobKey)) {
-				userJarBlobKeys.add(blobKey);
-			}
-		}
 	}
 
 	@Override
 	public String toString() {
 		return "JobGraph(jobId: " + jobID + ")";
+	}
+
+	public void setUserArtifactBlobKey(String entryName, PermanentBlobKey blobKey) throws IOException {
+		byte[] serializedBlobKey;
+		serializedBlobKey = InstantiationUtil.serializeObject(blobKey);
+
+		userArtifacts.computeIfPresent(entryName, (key, originalEntry) -> new DistributedCache.DistributedCacheEntry(
+			originalEntry.filePath,
+			originalEntry.isExecutable,
+			serializedBlobKey,
+			originalEntry.isZipped
+		));
+	}
+
+	public void setUserArtifactRemotePath(String entryName, String remotePath) {
+		userArtifacts.computeIfPresent(entryName, (key, originalEntry) -> new DistributedCache.DistributedCacheEntry(
+			remotePath,
+			originalEntry.isExecutable,
+			null,
+			originalEntry.isZipped
+		));
+	}
+
+	public void writeUserArtifactEntriesToConfiguration() {
+		for (Map.Entry<String, DistributedCache.DistributedCacheEntry> userArtifact : userArtifacts.entrySet()) {
+			DistributedCache.writeFileInfoToConfig(
+				userArtifact.getKey(),
+				userArtifact.getValue(),
+				jobConfiguration
+			);
+		}
 	}
 }

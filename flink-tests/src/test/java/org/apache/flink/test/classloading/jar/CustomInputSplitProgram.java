@@ -18,10 +18,6 @@
 
 package org.apache.flink.test.classloading.jar;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.io.InputFormat;
 import org.apache.flink.api.common.io.statistics.BaseStatistics;
@@ -36,13 +32,19 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.io.InputSplit;
 import org.apache.flink.core.io.InputSplitAssigner;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * Test class used by the {@link org.apache.flink.test.classloading.ClassLoaderITCase}.
+ */
 @SuppressWarnings("serial")
 public class CustomInputSplitProgram {
-	
+
 	public static void main(String[] args) throws Exception {
 
 		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
-		env.getConfig().disableSysoutLogging();
 
 		DataSet<Integer> data = env.createInput(new CustomInputFormat());
 
@@ -58,8 +60,8 @@ public class CustomInputSplitProgram {
 		env.execute();
 	}
 	// --------------------------------------------------------------------------------------------
-	
-	public static final class CustomInputFormat implements InputFormat<Integer, CustomInputSplit>, ResultTypeQueryable<Integer> {
+
+	private static final class CustomInputFormat implements InputFormat<Integer, CustomInputSplit>, ResultTypeQueryable<Integer> {
 
 		private static final long serialVersionUID = 1L;
 
@@ -113,7 +115,7 @@ public class CustomInputSplitProgram {
 		}
 	}
 
-	public static final class CustomInputSplit implements InputSplit {
+	private static final class CustomInputSplit implements InputSplit {
 
 		private static final long serialVersionUID = 1L;
 
@@ -129,7 +131,7 @@ public class CustomInputSplitProgram {
 		}
 	}
 
-	public static final class CustomSplitAssigner implements InputSplitAssigner {
+	private static final class CustomSplitAssigner implements InputSplitAssigner {
 
 		private final List<CustomInputSplit> remainingSplits;
 
@@ -145,6 +147,15 @@ public class CustomInputSplitProgram {
 					return remainingSplits.remove(size - 1);
 				} else {
 					return null;
+				}
+			}
+		}
+
+		@Override
+		public void returnInputSplit(List<InputSplit> splits, int taskId) {
+			synchronized (this) {
+				for (InputSplit split : splits) {
+					remainingSplits.add((CustomInputSplit) split);
 				}
 			}
 		}

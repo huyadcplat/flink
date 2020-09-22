@@ -23,6 +23,9 @@ import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.Plan;
 import org.apache.flink.api.common.operators.CollectionExecutor;
 
+/**
+ * Version of {@link ExecutionEnvironment} that allows serial, local, collection-based executions of Flink programs.
+ */
 @PublicEvolving
 public class CollectionEnvironment extends ExecutionEnvironment {
 
@@ -39,14 +42,5 @@ public class CollectionEnvironment extends ExecutionEnvironment {
 	@Override
 	public int getParallelism() {
 		return 1; // always serial
-	}
-	
-	@Override
-	public String getExecutionPlan() throws Exception {
-		throw new UnsupportedOperationException("Execution plans are not used for collection-based execution.");
-	}
-
-	@Override
-	public void startNewSession() throws Exception {
 	}
 }

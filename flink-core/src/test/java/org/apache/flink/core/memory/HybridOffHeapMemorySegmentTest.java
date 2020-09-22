@@ -19,66 +19,53 @@
 package org.apache.flink.core.memory;
 
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
 
 import java.nio.ByteBuffer;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-@RunWith(Parameterized.class)
-public class HybridOffHeapMemorySegmentTest extends MemorySegmentTestBase {
+/**
+ * Tests for the {@link HybridMemorySegment} in off-heap mode.
+ */
+public abstract class HybridOffHeapMemorySegmentTest extends MemorySegmentTestBase {
 
-	public HybridOffHeapMemorySegmentTest(int pageSize) {
+	HybridOffHeapMemorySegmentTest(int pageSize) {
 		super(pageSize);
-	}
-
-	@Override
-	MemorySegment createSegment(int size) {
-		return new HybridMemorySegment(ByteBuffer.allocateDirect(size));
-	}
-
-	@Override
-	MemorySegment createSegment(int size, Object owner) {
-		return new HybridMemorySegment(ByteBuffer.allocateDirect(size), owner);
 	}
 
 	@Test
 	public void testHybridHeapSegmentSpecifics() {
+		HybridMemorySegment seg = (HybridMemorySegment) createSegment(411);
+		ByteBuffer buffer = seg.getOffHeapBuffer();
+
+		assertFalse(seg.isFreed());
+		assertTrue(seg.isOffHeap());
+		assertEquals(buffer.capacity(), seg.size());
+		assertSame(buffer, seg.getOffHeapBuffer());
+
 		try {
-			final ByteBuffer buffer = ByteBuffer.allocateDirect(411);
-			HybridMemorySegment seg = new HybridMemorySegment(buffer);
-
-			assertFalse(seg.isFreed());
-			assertTrue(seg.isOffHeap());
-			assertEquals(buffer.capacity(), seg.size());
-			assertTrue(buffer == seg.getOffHeapBuffer());
-
-			try {
-				seg.getArray();
-				fail("should throw an exception");
-			}
-			catch (IllegalStateException e) {
-				// expected
-			}
-
-			ByteBuffer buf1 = seg.wrap(1, 2);
-			ByteBuffer buf2 = seg.wrap(3, 4);
-
-			assertTrue(buf1 != buffer);
-			assertTrue(buf2 != buffer);
-			assertTrue(buf1 != buf2);
-			assertEquals(1, buf1.position());
-			assertEquals(3, buf1.limit());
-			assertEquals(3, buf2.position());
-			assertEquals(7, buf2.limit());
+			//noinspection ResultOfMethodCallIgnored
+			seg.getArray();
+			fail("should throw an exception");
 		}
-		catch (Exception e) {
-			e.printStackTrace();
-			fail(e.getMessage());
+		catch (IllegalStateException e) {
+			// expected
 		}
+
+		ByteBuffer buf1 = seg.wrap(1, 2);
+		ByteBuffer buf2 = seg.wrap(3, 4);
+
+		assertNotSame(buf1, buffer);
+		assertNotSame(buf2, buffer);
+		assertNotSame(buf1, buf2);
+		assertEquals(1, buf1.position());
+		assertEquals(3, buf1.limit());
+		assertEquals(3, buf2.position());
+		assertEquals(7, buf2.limit());
 	}
 }

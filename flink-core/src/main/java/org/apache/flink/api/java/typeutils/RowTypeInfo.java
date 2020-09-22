@@ -41,7 +41,11 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 import static org.apache.flink.util.Preconditions.checkState;
 
 /**
- * TypeInformation for {@link Row}
+ * {@link TypeInformation} for {@link Row}.
+ *
+ * Note: The implementations of {@link #hashCode()} and {@link #equals(Object)} do not check field
+ * names because those don't matter during serialization and runtime. This might change in future
+ * versions. See FLINK-14438 for more information.
  */
 @PublicEvolving
 public class RowTypeInfo extends TupleTypeInfoBase<Row> {
@@ -249,7 +253,22 @@ public class RowTypeInfo extends TupleTypeInfoBase<Row> {
 
 	@Override
 	public int hashCode() {
-		return 31 * super.hashCode() + Arrays.hashCode(fieldNames);
+		return 31 * super.hashCode();
+	}
+
+	/**
+	 * The equals method does only check for field types. Field names do not matter during
+	 * runtime so we can consider rows with the same field types as equal.
+	 * Use {@link RowTypeInfo#schemaEquals(Object)} for checking schema-equivalence.
+	 */
+	@Override
+	public boolean equals(Object obj) {
+		if (obj instanceof RowTypeInfo) {
+			final RowTypeInfo other = (RowTypeInfo) obj;
+			return other.canEqual(this) && super.equals(other);
+		} else {
+			return false;
+		}
 	}
 
 	@Override
@@ -268,10 +287,32 @@ public class RowTypeInfo extends TupleTypeInfoBase<Row> {
 	}
 
 	/**
+	 * Creates a serializer for the old {@link Row} format before Flink 1.11.
+	 *
+	 * <p>The serialization format has changed from 1.10 to 1.11 and added {@link Row#getKind()}.
+	 */
+	@Deprecated
+	public TypeSerializer<Row> createLegacySerializer(ExecutionConfig config) {
+		int len = getArity();
+		TypeSerializer<?>[] fieldSerializers = new TypeSerializer[len];
+		for (int i = 0; i < len; i++) {
+			fieldSerializers[i] = types[i].createSerializer(config);
+		}
+		return new RowSerializer(fieldSerializers, true);
+	}
+
+	/**
 	 * Returns the field types of the row. The order matches the order of the field names.
 	 */
 	public TypeInformation<?>[] getFieldTypes() {
 		return types;
+	}
+
+	/**
+	 * Tests whether an other object describes the same, schema-equivalent row information.
+	 */
+	public boolean schemaEquals(Object obj) {
+		return equals(obj) && Arrays.equals(fieldNames, ((RowTypeInfo) obj).fieldNames);
 	}
 
 	private boolean hasDuplicateFieldNames(String[] fieldNames) {
@@ -354,5 +395,22 @@ public class RowTypeInfo extends TupleTypeInfoBase<Row> {
 				(TypeSerializer<Object>[]) fieldSerializers,
 				comparatorOrders);
 		}
+	}
+
+	/**
+	 * Creates a {@link RowTypeInfo} with projected fields.
+	 *
+	 * @param rowType The original RowTypeInfo whose fields are projected
+	 * @param fieldMapping The field mapping of the projection
+	 * @return A RowTypeInfo with projected fields.
+	 */
+	public static RowTypeInfo projectFields(RowTypeInfo rowType, int[] fieldMapping) {
+		TypeInformation[] fieldTypes = new TypeInformation[fieldMapping.length];
+		String[] fieldNames = new String[fieldMapping.length];
+		for (int i = 0; i < fieldMapping.length; i++) {
+			fieldTypes[i] = rowType.getTypeAt(fieldMapping[i]);
+			fieldNames[i] = rowType.getFieldNames()[fieldMapping[i]];
+		}
+		return new RowTypeInfo(fieldTypes, fieldNames);
 	}
 }

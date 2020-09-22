@@ -18,12 +18,16 @@
 
 package org.apache.flink.runtime.highavailability.zookeeper;
 
-import org.apache.curator.framework.CuratorFramework;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.HighAvailabilityOptions;
 import org.apache.flink.runtime.highavailability.RunningJobsRegistry;
-import org.apache.zookeeper.data.Stat;
+
+import org.apache.flink.shaded.curator4.org.apache.curator.framework.CuratorFramework;
+import org.apache.flink.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
@@ -36,9 +40,11 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  */
 public class ZooKeeperRunningJobsRegistry implements RunningJobsRegistry {
 
+	private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperRunningJobsRegistry.class);
+
 	private static final Charset ENCODING = Charset.forName("utf-8");
 
-	/** The ZooKeeper client to use */
+	/** The ZooKeeper client to use. */
 	private final CuratorFramework client;
 
 	private final String runningJobPath;
@@ -88,7 +94,7 @@ public class ZooKeeperRunningJobsRegistry implements RunningJobsRegistry {
 						return JobSchedulingStatus.valueOf(name);
 					}
 					catch (IllegalArgumentException e) {
-						throw new IOException("Found corrupt data in ZooKeeper: " + 
+						throw new IOException("Found corrupt data in ZooKeeper: " +
 								Arrays.toString(data) + " is no valid job status");
 					}
 				}
@@ -121,6 +127,7 @@ public class ZooKeeperRunningJobsRegistry implements RunningJobsRegistry {
 	}
 
 	private void writeEnumToZooKeeper(JobID jobID, JobSchedulingStatus status) throws Exception {
+		LOG.debug("Setting scheduling state for job {} to {}.", jobID, status);
 		final String zkPath = createZkPath(jobID);
 		this.client.newNamespaceAwareEnsurePath(zkPath).ensure(client.getZookeeperClient());
 		this.client.setData().forPath(zkPath, status.name().getBytes(ENCODING));

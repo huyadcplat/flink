@@ -23,14 +23,14 @@ under the License.
 	<parent>
 		<groupId>org.apache.flink</groupId>
 		<artifactId>flink-parent</artifactId>
-		<version>1.4-SNAPSHOT</version>
+		<version>1.12-SNAPSHOT</version>
 		<relativePath>..</relativePath>
 	</parent>
 
 	<artifactId>flink-quickstart</artifactId>
 	<packaging>pom</packaging>
 
-	<name>flink-quickstart</name>
+	<name>Flink : Quickstart : </name>
 	<description>Parent project for different quickstart archetypes for Apache Flink</description>
 
 	<modules>
@@ -71,14 +71,6 @@ under the License.
 						<phase/>
 					</execution>
 				</executions>
-			</plugin>
-
-			<plugin>
-				<groupId>com.github.siom79.japicmp</groupId>
-				<artifactId>japicmp-maven-plugin</artifactId>
-				<configuration>
-					<skip>true</skip>
-				</configuration>
 			</plugin>
 
 			<!-- use alternative delimiter for filtering resources -->

@@ -15,20 +15,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.runtime.security.modules;
 
+import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.runtime.security.SecurityConfiguration;
+import org.apache.flink.runtime.util.HadoopUtils;
+
 import org.apache.commons.lang3.StringUtils;
-import org.apache.flink.api.java.hadoop.mapred.utils.HadoopUtils;
-import org.apache.flink.runtime.security.SecurityUtils;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.security.token.Token;
+import org.apache.hadoop.security.token.TokenIdentifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.security.auth.Subject;
+
 import java.io.File;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.Collection;
+
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * Responsible for installing a Hadoop login user.
@@ -37,12 +48,28 @@ public class HadoopModule implements SecurityModule {
 
 	private static final Logger LOG = LoggerFactory.getLogger(HadoopModule.class);
 
-	UserGroupInformation loginUser;
+	private final SecurityConfiguration securityConfig;
+
+	private final Configuration hadoopConfiguration;
+
+	public HadoopModule(
+		SecurityConfiguration securityConfiguration,
+		Configuration hadoopConfiguration) {
+		this.securityConfig = checkNotNull(securityConfiguration);
+		this.hadoopConfiguration = checkNotNull(hadoopConfiguration);
+	}
+
+	@VisibleForTesting
+	public SecurityConfiguration getSecurityConfig() {
+		return securityConfig;
+	}
 
 	@Override
-	public void install(SecurityUtils.SecurityConfiguration securityConfig) throws SecurityInstallException {
+	public void install() throws SecurityInstallException {
 
-		UserGroupInformation.setConfiguration(securityConfig.getHadoopConfiguration());
+		UserGroupInformation.setConfiguration(hadoopConfiguration);
+
+		UserGroupInformation loginUser;
 
 		try {
 			if (UserGroupInformation.isSecurityEnabled() &&
@@ -56,25 +83,23 @@ public class HadoopModule implements SecurityModule {
 				// supplement with any available tokens
 				String fileLocation = System.getenv(UserGroupInformation.HADOOP_TOKEN_FILE_LOCATION);
 				if (fileLocation != null) {
-					/*
-					 * Use reflection API since the API semantics are not available in Hadoop1 profile. Below APIs are
-					 * used in the context of reading the stored tokens from UGI.
-					 * Credentials cred = Credentials.readTokenStorageFile(new File(fileLocation), config.hadoopConf);
-					 * loginUser.addCredentials(cred);
-					*/
-					try {
-						Method readTokenStorageFileMethod = Credentials.class.getMethod("readTokenStorageFile",
-							File.class, org.apache.hadoop.conf.Configuration.class);
-						Credentials cred = (Credentials) readTokenStorageFileMethod.invoke(null, new File(fileLocation),
-							securityConfig.getHadoopConfiguration());
-						Method addCredentialsMethod = UserGroupInformation.class.getMethod("addCredentials",
-							Credentials.class);
-						addCredentialsMethod.invoke(loginUser, cred);
-					} catch (NoSuchMethodException e) {
-						LOG.warn("Could not find method implementations in the shaded jar. Exception: {}", e);
-					} catch (InvocationTargetException e) {
-						throw e.getTargetException();
+					Credentials credentialsFromTokenStorageFile = Credentials.readTokenStorageFile(new File(fileLocation), hadoopConfiguration);
+
+					// if UGI uses Kerberos keytabs for login, do not load HDFS delegation token since
+					// the UGI would prefer the delegation token instead, which eventually expires
+					// and does not fallback to using Kerberos tickets
+					Credentials credentialsToBeAdded = new Credentials();
+					final Text hdfsDelegationTokenKind = new Text("HDFS_DELEGATION_TOKEN");
+					Collection<Token<? extends TokenIdentifier>> usrTok = credentialsFromTokenStorageFile.getAllTokens();
+					//If UGI use keytab for login, do not load HDFS delegation token.
+					for (Token<? extends TokenIdentifier> token : usrTok) {
+						if (!token.getKind().equals(hdfsDelegationTokenKind)) {
+							final Text id = new Text(token.getIdentifier());
+							credentialsToBeAdded.addToken(id, token);
+						}
 					}
+
+					loginUser.addCredentials(credentialsToBeAdded);
 				}
 			} else {
 				// login with current user credentials (e.g. ticket cache, OS login)
@@ -85,7 +110,7 @@ public class HadoopModule implements SecurityModule {
 					Method loginUserFromSubjectMethod = UserGroupInformation.class.getMethod("loginUserFromSubject", Subject.class);
 					loginUserFromSubjectMethod.invoke(null, (Subject) null);
 				} catch (NoSuchMethodException e) {
-					LOG.warn("Could not find method implementations in the shaded jar. Exception: {}", e);
+					LOG.warn("Could not find method implementations in the shaded jar.", e);
 				} catch (InvocationTargetException e) {
 					throw e.getTargetException();
 				}
@@ -93,27 +118,20 @@ public class HadoopModule implements SecurityModule {
 				loginUser = UserGroupInformation.getLoginUser();
 			}
 
-			if (UserGroupInformation.isSecurityEnabled()) {
-				// note: UGI::hasKerberosCredentials inaccurately reports false
-				// for logins based on a keytab (fixed in Hadoop 2.6.1, see HADOOP-10786),
-				// so we check only in ticket cache scenario.
-				if (securityConfig.useTicketCache() && !loginUser.hasKerberosCredentials()) {
-					// a delegation token is an adequate substitute in most cases
-					if (!HadoopUtils.hasHDFSDelegationToken()) {
-						LOG.warn("Hadoop security is enabled but current login user does not have Kerberos credentials");
-					}
-				}
-			}
-
 			LOG.info("Hadoop user set to {}", loginUser);
 
+			if (HadoopUtils.isKerberosSecurityEnabled(loginUser)) {
+				boolean isCredentialsConfigured = HadoopUtils.areKerberosCredentialsValid(loginUser, securityConfig.useTicketCache());
+
+				LOG.info("Kerberos security is enabled and credentials are {}.", isCredentialsConfigured ? "valid" : "invalid");
+			}
 		} catch (Throwable ex) {
 			throw new SecurityInstallException("Unable to set the Hadoop login user", ex);
 		}
 	}
 
 	@Override
-	public void uninstall() throws SecurityInstallException {
+	public void uninstall() {
 		throw new UnsupportedOperationException();
 	}
 }

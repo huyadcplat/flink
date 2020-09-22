@@ -31,8 +31,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * An example of session windowing where events are keyed by ID and grouped
- * and counted within session windows with a timeout of 3 time units.
+ * An example of session windowing that keys events by ID and groups and counts them in
+ * session with gaps of 3 milliseconds.
  */
 public class SessionWindowing {
 
@@ -70,9 +70,6 @@ public class SessionWindowing {
 						for (Tuple3<String, Long, Integer> value : input) {
 							ctx.collectWithTimestamp(value, value.f1);
 							ctx.emitWatermark(new Watermark(value.f1 - 1));
-							if (!fileOutput) {
-								System.out.println("Collected: " + value);
-							}
 						}
 						ctx.emitWatermark(new Watermark(Long.MAX_VALUE));
 					}
@@ -84,7 +81,7 @@ public class SessionWindowing {
 
 		// We create sessions for each id with max timeout of 3 time units
 		DataStream<Tuple3<String, Long, Integer>> aggregated = source
-				.keyBy(0)
+				.keyBy(value -> value.f0)
 				.window(EventTimeSessionWindows.withGap(Time.milliseconds(3L)))
 				.sum(2);
 

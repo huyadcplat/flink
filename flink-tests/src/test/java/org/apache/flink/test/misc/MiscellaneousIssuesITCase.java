@@ -23,67 +23,49 @@ import org.apache.flink.api.common.accumulators.LongCounter;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.RichFlatMapFunction;
 import org.apache.flink.api.java.DataSet;
+import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.io.DiscardingOutputFormat;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.runtime.client.JobExecutionException;
-import org.apache.flink.runtime.minicluster.LocalFlinkMiniCluster;
-
-import org.apache.flink.test.util.TestEnvironment;
+import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
+import org.apache.flink.test.util.MiniClusterWithClientResource;
 import org.apache.flink.util.Collector;
-
 import org.apache.flink.util.TestLogger;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
+
+import org.junit.ClassRule;
 import org.junit.Test;
 
-import static org.junit.Assert.*;
+import static org.apache.flink.util.ExceptionUtils.findThrowable;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * Tests for the system behavior in multiple corner cases
  *   - when null records are passed through the system.
  *   - when disjoint dataflows are executed
  *   - when accumulators are used chained after a non-udf operator.
- *   
- * The tests are bundled into one class to reuse the same test cluster. This speeds
+ *
+ * <p>The tests are bundled into one class to reuse the same test cluster. This speeds
  * up test execution, as the majority of the test time goes usually into starting/stopping the
  * test cluster.
  */
 @SuppressWarnings("serial")
 public class MiscellaneousIssuesITCase extends TestLogger {
 
-	private static final int PARALLELISM = 6;
+	@ClassRule
+	public static final MiniClusterWithClientResource MINI_CLUSTER_RESOURCE = new MiniClusterWithClientResource(
+		new MiniClusterResourceConfiguration.Builder()
+			.setNumberTaskManagers(2)
+			.setNumberSlotsPerTaskManager(3)
+			.build());
 
-	private static LocalFlinkMiniCluster cluster;
-
-	private static TestEnvironment env;
-	
-	@BeforeClass
-	public static void startCluster() {
-		Configuration config = new Configuration();
-		config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, 2);
-		config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, 3);
-		config.setLong(TaskManagerOptions.MANAGED_MEMORY_SIZE, 12L);
-		cluster = new LocalFlinkMiniCluster(config, false);
-
-		cluster.start();
-
-		env = new TestEnvironment(cluster, PARALLELISM, false);
-	}
-	
-	@AfterClass
-	public static void shutdownCluster() {
-		cluster.shutdown();
-		cluster = null;
-	}
-	
 	@Test
 	public void testNullValues() {
 		try {
+			ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 			env.setParallelism(1);
-			env.getConfig().disableSysoutLogging();
 
 			DataSet<String> data = env.fromElements("hallo")
 					.map(new MapFunction<String, String>() {
@@ -99,8 +81,7 @@ public class MiscellaneousIssuesITCase extends TestLogger {
 				fail("this should fail due to null values.");
 			}
 			catch (JobExecutionException e) {
-				assertNotNull(e.getCause());
-				assertTrue(e.getCause() instanceof NullPointerException);
+				assertTrue(findThrowable(e, NullPointerException.class).isPresent());
 			}
 		}
 		catch (Exception e) {
@@ -112,8 +93,8 @@ public class MiscellaneousIssuesITCase extends TestLogger {
 	@Test
 	public void testDisjointDataflows() {
 		try {
+			ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 			env.setParallelism(5);
-			env.getConfig().disableSysoutLogging();
 
 			// generate two different flows
 			env.generateSequence(1, 10).output(new DiscardingOutputFormat<Long>());
@@ -128,13 +109,13 @@ public class MiscellaneousIssuesITCase extends TestLogger {
 
 	@Test
 	public void testAccumulatorsAfterNoOp() {
-		
-		final String ACC_NAME = "test_accumulator";
-		
+
+		final String accName = "test_accumulator";
+
 		try {
+			ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 			env.setParallelism(6);
-			env.getConfig().disableSysoutLogging();
-			
+
 			env.generateSequence(1, 1000000)
 					.rebalance()
 					.flatMap(new RichFlatMapFunction<Long, Long>() {
@@ -143,7 +124,7 @@ public class MiscellaneousIssuesITCase extends TestLogger {
 
 						@Override
 						public void open(Configuration parameters) {
-							counter = getRuntimeContext().getLongCounter(ACC_NAME);
+							counter = getRuntimeContext().getLongCounter(accName);
 						}
 
 						@Override
@@ -154,8 +135,8 @@ public class MiscellaneousIssuesITCase extends TestLogger {
 					.output(new DiscardingOutputFormat<Long>());
 
 			JobExecutionResult result = env.execute();
-			
-			assertEquals(1000000L, result.getAllAccumulatorResults().get(ACC_NAME));
+
+			assertEquals(1000000L, result.getAllAccumulatorResults().get(accName));
 		}
 		catch (Exception e) {
 			e.printStackTrace();

@@ -21,6 +21,8 @@ package org.apache.flink.runtime.leaderelection;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
 import org.apache.flink.util.Preconditions;
 
+import javax.annotation.Nonnull;
+
 import java.util.UUID;
 
 /**
@@ -55,10 +57,10 @@ public class StandaloneLeaderElectionService implements LeaderElectionService {
 	}
 
 	@Override
-	public void confirmLeaderSessionID(UUID leaderSessionID) {}
+	public void confirmLeadership(UUID leaderSessionID, String leaderAddress) {}
 
 	@Override
-	public boolean hasLeadership() {
-		return true;
+	public boolean hasLeadership(@Nonnull UUID leaderSessionId) {
+		return (contender != null && HighAvailabilityServices.DEFAULT_LEADER_ID.equals(leaderSessionId));
 	}
 }

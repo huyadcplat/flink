@@ -59,23 +59,23 @@ The checkpoint history keeps statistics about recently triggered checkpoints, in
 - **ID**: The ID of the triggered checkpoint. The IDs are incremented for each checkpoint, starting at 1.
 - **Status**: The current status of the checkpoint, which is either *In Progress* (<i aria-hidden="true" class="fa fa-circle-o-notch fa-spin fa-fw"/>), *Completed* (<i aria-hidden="true" class="fa fa-check"/>), or *Failed* (<i aria-hidden="true" class="fa fa-remove"/>). If the triggered checkpoint is a savepoint, you will see a <i aria-hidden="true" class="fa fa-floppy-o"/> symbol.
 - **Trigger Time**: The time when the checkpoint was triggered at the JobManager.
-- **Latest Acknowledgement**: The time when the latest acknowledged for any subtask was received at the JobManager (or n/a if no acknowledgement received yet).
+- **Latest Acknowledgement**: The time when the latest acknowledgement for any subtask was received at the JobManager (or n/a if no acknowledgement received yet).
 - **End to End Duration**: The duration from the trigger timestamp until the latest acknowledgement (or n/a if no acknowledgement received yet). This end to end duration for a complete checkpoint is determined by the last subtask that acknowledges the checkpoint. This time is usually larger than single subtasks need to actually checkpoint the state.
-- **State Size**: The state size over all acknowledged subtasks.
+- **Checkpointed Data Size**: The checkpointed data size over all acknowledged subtasks. If incremental checkpointing is enabled this value is the checkpointed data size delta.
 - **Buffered During Alignment**: The number of bytes buffered during alignment over all acknowledged subtasks. This is only > 0 if a stream alignment takes place during checkpointing. If the checkpointing mode is `AT_LEAST_ONCE` this will always be zero as at least once mode does not require stream alignment.
 
 #### History Size Configuration
 
 You can configure the number of recent checkpoints that are remembered for the history via the following configuration key. The default is `10`.
 
-```sh
+{% highlight yaml %}
 # Number of recent checkpoints that are remembered
-jobmanager.web.checkpoints.history: 15
-```
+web.checkpoints.history: 15
+{% endhighlight %}
 
 ### Summary Tab
 
-The summary computes a simple min/average/maximum statitics over all completed checkpoints for the End to End Duration, State Size, and Bytes Buffered During Alignment (see [History](#history) for details about what these mean).
+The summary computes a simple min/average/maximum statistics over all completed checkpoints for the End to End Duration, Checkpointed Data Size, and Bytes Buffered During Alignment (see [History](#history) for details about what these mean).
 
 <center>
   <img src="{{ site.baseurl }}/fig/checkpoint_monitoring-summary.png" width="700px" alt="Checkpoint Monitoring: Summary">
@@ -96,7 +96,7 @@ The configuration list your streaming configuration:
 
 ### Checkpoint Details
 
-When you click on a *More details* link for a checkpoint, you get a Minumum/Average/Maximum summary over all its operators and also the detailed numbers per single subtask. 
+When you click on a *More details* link for a checkpoint, you get a Minimum/Average/Maximum summary over all its operators and also the detailed numbers per single subtask.
 
 <center>
   <img src="{{ site.baseurl }}/fig/checkpoint_monitoring-details.png" width="700px" alt="Checkpoint Monitoring: Details">
@@ -113,3 +113,5 @@ When you click on a *More details* link for a checkpoint, you get a Minumum/Aver
 <center>
   <img src="{{ site.baseurl }}/fig/checkpoint_monitoring-details_subtasks.png" width="700px" alt="Checkpoint Monitoring: Subtasks">
 </center>
+
+{% top %}

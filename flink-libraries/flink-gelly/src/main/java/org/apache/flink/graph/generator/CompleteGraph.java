@@ -28,7 +28,7 @@ import org.apache.flink.util.Preconditions;
  * @see <a href="http://mathworld.wolfram.com/CompleteGraph.html">Complete Graph at Wolfram MathWorld</a>
  */
 public class CompleteGraph
-extends AbstractGraphGenerator<LongValue, NullValue, NullValue> {
+extends GraphGeneratorBase<LongValue, NullValue, NullValue> {
 
 	public static final int MINIMUM_VERTEX_COUNT = 2;
 
@@ -36,7 +36,7 @@ extends AbstractGraphGenerator<LongValue, NullValue, NullValue> {
 	private final ExecutionEnvironment env;
 
 	// Required configuration
-	private long vertexCount;
+	private final long vertexCount;
 
 	/**
 	 * An undirected {@link Graph} connecting every distinct pair of vertices.

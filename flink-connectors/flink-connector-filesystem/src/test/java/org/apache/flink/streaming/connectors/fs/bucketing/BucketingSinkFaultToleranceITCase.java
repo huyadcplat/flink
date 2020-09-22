@@ -15,9 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.connectors.fs.bucketing;
 
-import com.google.common.collect.Sets;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.streaming.api.checkpoint.ListCheckpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -25,23 +25,24 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunction;
 import org.apache.flink.test.checkpointing.StreamFaultToleranceTestBase;
 import org.apache.flink.util.NetUtils;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
-import org.junit.AfterClass;
+import org.junit.After;
 import org.junit.Assert;
-import org.junit.BeforeClass;
+import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.BufferedReader;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -50,18 +51,23 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static org.apache.flink.streaming.connectors.fs.bucketing.BucketingSinkTestUtils.IN_PROGRESS_SUFFIX;
+import static org.apache.flink.streaming.connectors.fs.bucketing.BucketingSinkTestUtils.PENDING_SUFFIX;
 import static org.junit.Assert.assertTrue;
 
 /**
  * Tests for {@link BucketingSink}.
  *
- * <p>
- * This test only verifies the exactly once behaviour of the sink. Another test tests the
+ *
+ * <p>This test only verifies the exactly once behaviour of the sink. Another test tests the
  * rolling behaviour.
  */
 public class BucketingSinkFaultToleranceITCase extends StreamFaultToleranceTestBase {
 
-	final long NUM_STRINGS = 16_000;
+	static final long NUM_STRINGS = 16_000;
+
+	// this is already the default, but we explicitly set it to make the test explicit
+	static final String PART_PREFIX = "part";
 
 	@ClassRule
 	public static TemporaryFolder tempFolder = new TemporaryFolder();
@@ -71,11 +77,8 @@ public class BucketingSinkFaultToleranceITCase extends StreamFaultToleranceTestB
 
 	private static String outPath;
 
-	private static final String PENDING_SUFFIX = ".pending";
-	private static final String IN_PROGRESS_SUFFIX = ".in-progress";
-
-	@BeforeClass
-	public static void createHDFS() throws IOException {
+	@Before
+	public void createHDFS() throws IOException {
 		Configuration conf = new Configuration();
 
 		File dataDir = tempFolder.newFolder();
@@ -91,8 +94,8 @@ public class BucketingSinkFaultToleranceITCase extends StreamFaultToleranceTestB
 				+ "/string-non-rolling-out";
 	}
 
-	@AfterClass
-	public static void destroyHDFS() {
+	@After
+	public void destroyHDFS() {
 		if (hdfsCluster != null) {
 			hdfsCluster.shutdown();
 		}
@@ -102,10 +105,8 @@ public class BucketingSinkFaultToleranceITCase extends StreamFaultToleranceTestB
 	public void testProgram(StreamExecutionEnvironment env) {
 		assertTrue("Broken test setup", NUM_STRINGS % 40 == 0);
 
-		int PARALLELISM = 12;
-
 		env.enableCheckpointing(20);
-		env.setParallelism(PARALLELISM);
+		env.setParallelism(12);
 		env.disableOperatorChaining();
 
 		DataStream<String> stream = env.addSource(new StringGeneratingSourceFunction(NUM_STRINGS)).startNewChain();
@@ -117,6 +118,7 @@ public class BucketingSinkFaultToleranceITCase extends StreamFaultToleranceTestB
 				.setBucketer(new BasePathBucketer<String>())
 				.setBatchSize(10000)
 				.setValidLengthPrefix("")
+				.setPartPrefix(PART_PREFIX)
 				.setPendingPrefix("")
 				.setPendingSuffix(PENDING_SUFFIX)
 				.setInProgressSuffix(IN_PROGRESS_SUFFIX);
@@ -136,7 +138,7 @@ public class BucketingSinkFaultToleranceITCase extends StreamFaultToleranceTestB
 		// Keep a set of the message IDs that we read. The size must equal the read count and
 		// the NUM_STRINGS. If numRead is bigger than the size of the set we have seen some
 		// elements twice.
-		Set<Integer> readNumbers = Sets.newHashSet();
+		Set<Integer> readNumbers = new HashSet<>();
 
 		HashSet<String> uniqMessagesRead = new HashSet<>();
 		HashSet<String> messagesInCommittedFiles = new HashSet<>();
@@ -146,6 +148,10 @@ public class BucketingSinkFaultToleranceITCase extends StreamFaultToleranceTestB
 
 		while (files.hasNext()) {
 			LocatedFileStatus file = files.next();
+			if (!file.getPath().getName().startsWith(PART_PREFIX)) {
+				// ignore files that don't match with our expected part prefix
+				continue;
+			}
 
 			if (!file.getPath().toString().endsWith(".valid-length")) {
 				int validLength = (int) file.getLen();
@@ -181,7 +187,7 @@ public class BucketingSinkFaultToleranceITCase extends StreamFaultToleranceTestB
 						int messageId = Integer.parseInt(matcher.group(1));
 						readNumbers.add(messageId);
 					} else {
-						Assert.fail("Read line does not match expected pattern.");
+						Assert.fail("Read line does not match expected pattern. Line: " + line);
 					}
 					line = br.readLine();
 				}
@@ -207,7 +213,6 @@ public class BucketingSinkFaultToleranceITCase extends StreamFaultToleranceTestB
 
 		private long failurePos;
 		private long count;
-
 
 		OnceFailingIdentityMapper(long numElements) {
 			this.numElements = numElements;

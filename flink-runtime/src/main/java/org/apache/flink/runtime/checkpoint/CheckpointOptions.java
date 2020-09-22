@@ -18,91 +18,140 @@
 
 package org.apache.flink.runtime.checkpoint;
 
-import static org.apache.flink.util.Preconditions.checkNotNull;
+import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
 
 import java.io.Serializable;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
-import org.apache.flink.runtime.jobgraph.tasks.StatefulTask;
+
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * Options for performing the checkpoint.
  *
  * <p>The {@link CheckpointProperties} are related and cover properties that
  * are only relevant at the {@link CheckpointCoordinator}. These options are
- * relevant at the {@link StatefulTask} instances running on task managers.
+ * relevant at the {@link AbstractInvokable} instances running on task managers.
  */
 public class CheckpointOptions implements Serializable {
 
 	private static final long serialVersionUID = 5010126558083292915L;
 
 	/** Type of the checkpoint. */
-	@Nonnull
 	private final CheckpointType checkpointType;
 
 	/** Target location for the checkpoint. */
-	@Nullable
-	private final String targetLocation;
+	private final CheckpointStorageLocationReference targetLocation;
 
-	private CheckpointOptions(
-			@Nonnull CheckpointType checkpointType,
-			@Nullable  String targetLocation) {
-		this.checkpointType = checkNotNull(checkpointType);
-		this.targetLocation = targetLocation;
+	private final boolean isExactlyOnceMode;
+
+	private final boolean isUnalignedCheckpoint;
+
+	@VisibleForTesting
+	public CheckpointOptions(
+			CheckpointType checkpointType,
+			CheckpointStorageLocationReference targetLocation) {
+		this(checkpointType, targetLocation, true, false);
 	}
+
+	public CheckpointOptions(
+			CheckpointType checkpointType,
+			CheckpointStorageLocationReference targetLocation,
+			boolean isExactlyOnceMode,
+			boolean isUnalignedCheckpoint) {
+
+		this.checkpointType = checkNotNull(checkpointType);
+		this.targetLocation = checkNotNull(targetLocation);
+		this.isExactlyOnceMode = isExactlyOnceMode;
+		this.isUnalignedCheckpoint = isUnalignedCheckpoint;
+	}
+
+	public boolean needsAlignment() {
+		return isExactlyOnceMode() && (getCheckpointType().isSavepoint() || !isUnalignedCheckpoint());
+	}
+
+	// ------------------------------------------------------------------------
 
 	/**
 	 * Returns the type of checkpoint to perform.
-	 *
-	 * @return Type of checkpoint to perform.
 	 */
-	@Nonnull
 	public CheckpointType getCheckpointType() {
 		return checkpointType;
 	}
 
 	/**
-	 * Returns a custom target location or <code>null</code> if none
-	 * was specified.
-	 *
-	 * @return A custom target location or <code>null</code>.
+	 * Returns the target location for the checkpoint.
 	 */
-	@Nullable
-	public String getTargetLocation() {
+	public CheckpointStorageLocationReference getTargetLocation() {
 		return targetLocation;
+	}
+
+	public boolean isExactlyOnceMode() {
+		return isExactlyOnceMode;
+	}
+
+	public boolean isUnalignedCheckpoint() {
+		return isUnalignedCheckpoint;
+	}
+
+	// ------------------------------------------------------------------------
+
+	@Override
+	public int hashCode() {
+		int result = 1;
+		result = 31 * result + targetLocation.hashCode();
+		result = 31 * result + checkpointType.hashCode();
+		result = 31 * result + (isExactlyOnceMode ? 1 : 0);
+		result = 31 * result + (isUnalignedCheckpoint ? 1 : 0);
+		return result;
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		if (this == obj) {
+			return true;
+		}
+		else if (obj != null && obj.getClass() == CheckpointOptions.class) {
+			final CheckpointOptions that = (CheckpointOptions) obj;
+			return this.checkpointType == that.checkpointType &&
+					this.targetLocation.equals(that.targetLocation) &&
+					this.isExactlyOnceMode == that.isExactlyOnceMode &&
+					this.isUnalignedCheckpoint == that.isUnalignedCheckpoint;
+		}
+		else {
+			return false;
+		}
 	}
 
 	@Override
 	public String toString() {
-		return "CheckpointOptions(" + checkpointType + ")";
+		return "CheckpointOptions {" +
+			"checkpointType = " + checkpointType +
+			", targetLocation = " + targetLocation +
+			", isExactlyOnceMode = " + isExactlyOnceMode +
+			", isUnalignedCheckpoint = " + isUnalignedCheckpoint +
+			"}";
 	}
 
 	// ------------------------------------------------------------------------
-
-	private static final CheckpointOptions FULL_CHECKPOINT = new CheckpointOptions(CheckpointType.FULL_CHECKPOINT, null);
-
-	public static CheckpointOptions forFullCheckpoint() {
-		return FULL_CHECKPOINT;
-	}
-
-	public static CheckpointOptions forSavepoint(String targetDirectory) {
-		checkNotNull(targetDirectory, "targetDirectory");
-		return new CheckpointOptions(CheckpointType.SAVEPOINT, targetDirectory);
-	}
-
+	//  Factory methods
 	// ------------------------------------------------------------------------
 
-	/**
-	 *  The type of checkpoint to perform.
-	 */
-	public enum CheckpointType {
+	private static final CheckpointOptions CHECKPOINT_AT_DEFAULT_LOCATION =
+			new CheckpointOptions(CheckpointType.CHECKPOINT, CheckpointStorageLocationReference.getDefault());
 
-		/** A full checkpoint. */
-		FULL_CHECKPOINT,
-
-		/** A savepoint. */
-		SAVEPOINT;
-
+	@VisibleForTesting
+	public static CheckpointOptions forCheckpointWithDefaultLocation() {
+		return CHECKPOINT_AT_DEFAULT_LOCATION;
 	}
 
+	public static CheckpointOptions forCheckpointWithDefaultLocation(
+			boolean isExactlyOnceMode,
+			boolean isUnalignedCheckpoint) {
+		return new CheckpointOptions(
+			CheckpointType.CHECKPOINT,
+			CheckpointStorageLocationReference.getDefault(),
+			isExactlyOnceMode,
+			isUnalignedCheckpoint);
+	}
 }

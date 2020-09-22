@@ -18,36 +18,31 @@
 
 package org.apache.flink.runtime.executiongraph;
 
-import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.common.time.Time;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.blob.BlobKey;
+import org.apache.flink.api.common.JobStatus;
+import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutorServiceAdapter;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.executiongraph.failover.FailoverStrategy;
 import org.apache.flink.runtime.executiongraph.failover.FailoverStrategy.Factory;
 import org.apache.flink.runtime.executiongraph.restart.InfiniteDelayRestartStrategy;
 import org.apache.flink.runtime.executiongraph.utils.SimpleSlotProvider;
 import org.apache.flink.runtime.jobgraph.JobGraph;
-import org.apache.flink.runtime.jobgraph.JobStatus;
 import org.apache.flink.runtime.jobgraph.JobVertex;
-import org.apache.flink.runtime.testingUtils.TestingUtils;
 import org.apache.flink.runtime.testtasks.NoOpInvokable;
-import org.apache.flink.util.SerializedValue;
+import org.apache.flink.util.TestLogger;
 
 import org.junit.Test;
 
-import java.net.URL;
-import java.util.Collections;
 import java.util.Random;
 
 import static org.apache.flink.runtime.executiongraph.ExecutionGraphTestUtils.waitUntilExecutionState;
-
 import static org.junit.Assert.assertEquals;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
-import static org.mockito.Mockito.*;
-
-public class GlobalModVersionTest {
+public class GlobalModVersionTest extends TestLogger {
 
 	/**
 	 * Tests that failures during a global cancellation are not handed to the local
@@ -89,17 +84,17 @@ public class GlobalModVersionTest {
 		// all cancellations are done now
 		for (ExecutionVertex v : graph.getVerticesTopologically().iterator().next().getTaskVertices()) {
 			final Execution exec = v.getCurrentExecutionAttempt();
-			exec.cancelingComplete();
+			exec.completeCancelling();
 		}
 
-		assertEquals(JobStatus.CANCELED, graph.getState());
+		assertEquals(JobStatus.CANCELED, graph.getTerminationFuture().get());
 
 		// no failure notification at all
 		verify(mockStrategy, times(0)).onTaskFailure(any(Execution.class), any(Throwable.class));
 	}
 
 	/**
-	 * Tests that failures during a global faiover are not handed to the local
+	 * Tests that failures during a global failover are not handed to the local
 	 * failover strategy.
 	 */
 	@Test
@@ -143,7 +138,7 @@ public class GlobalModVersionTest {
 		// all cancellations are done now
 		for (ExecutionVertex v : graph.getVerticesTopologically().iterator().next().getTaskVertices()) {
 			final Execution exec = v.getCurrentExecutionAttempt();
-			exec.cancelingComplete();
+			exec.completeCancelling();
 		}
 
 		assertEquals(JobStatus.RESTARTING, graph.getState());
@@ -157,34 +152,27 @@ public class GlobalModVersionTest {
 	// ------------------------------------------------------------------------
 
 	private ExecutionGraph createSampleGraph(FailoverStrategy failoverStrategy) throws Exception {
-
 		final JobID jid = new JobID();
 		final int parallelism = new Random().nextInt(10) + 1;
-
-		final SimpleSlotProvider slotProvider = new SimpleSlotProvider(jid, parallelism);
-
-		// build a simple execution graph with on job vertex, parallelism 2
-		final ExecutionGraph graph = new ExecutionGraph(
-				TestingUtils.defaultExecutor(),
-				TestingUtils.defaultExecutor(),
-				jid,
-				"test job",
-				new Configuration(),
-				new SerializedValue<>(new ExecutionConfig()),
-				Time.seconds(10),
-				new InfiniteDelayRestartStrategy(),
-				new CustomStrategy(failoverStrategy),
-				Collections.<BlobKey>emptyList(),
-				Collections.<URL>emptyList(),
-				slotProvider,
-				getClass().getClassLoader());
 
 		JobVertex jv = new JobVertex("test vertex");
 		jv.setInvokableClass(NoOpInvokable.class);
 		jv.setParallelism(parallelism);
 
 		JobGraph jg = new JobGraph(jid, "testjob", jv);
-		graph.attachJobGraph(jg.getVerticesSortedTopologicallyFromSources());
+
+		final SimpleSlotProvider slotProvider = new SimpleSlotProvider(parallelism);
+
+		// build a simple execution graph with on job vertex, parallelism 2
+		final ExecutionGraph graph = TestingExecutionGraphBuilder
+			.newBuilder()
+			.setJobGraph(jg)
+			.setRestartStrategy(new InfiniteDelayRestartStrategy())
+			.setFailoverStrategyFactory(new CustomStrategy(failoverStrategy))
+			.setSlotProvider(slotProvider)
+			.build();
+
+		graph.start(ComponentMainThreadExecutorServiceAdapter.forMainThread());
 
 		return graph;
 	}

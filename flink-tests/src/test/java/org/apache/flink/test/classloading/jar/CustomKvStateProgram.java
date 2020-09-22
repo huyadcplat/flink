@@ -29,15 +29,16 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.source.ParallelSourceFunction;
+import org.apache.flink.test.util.InfiniteIntegerSource;
 import org.apache.flink.util.Collector;
 
+import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * A streaming program with a custom reducing KvState.
  *
- * <p>This is used to test proper usage of the user code class laoder when
+ * <p>This is used to test proper usage of the user code class loader when
  * disposing savepoints.
  */
 public class CustomKvStateProgram {
@@ -47,11 +48,12 @@ public class CustomKvStateProgram {
 		final String checkpointPath = args[1];
 		final int checkpointingInterval = Integer.parseInt(args[2]);
 		final String outputPath = args[3];
+		final Optional<Boolean> unalignedCheckpoints = args.length > 4 ? Optional.of(Boolean.parseBoolean(args[4])) : Optional.empty();
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 		env.setParallelism(parallelism);
-		env.getConfig().disableSysoutLogging();
 		env.enableCheckpointing(checkpointingInterval);
+		unalignedCheckpoints.ifPresent(value -> env.getCheckpointConfig().enableUnalignedCheckpoints(value));
 		env.setStateBackend(new FsStateBackend(checkpointPath));
 
 		DataStream<Integer> source = env.addSource(new InfiniteIntegerSource());
@@ -64,7 +66,7 @@ public class CustomKvStateProgram {
 						return new Tuple2<>(ThreadLocalRandom.current().nextInt(parallelism), value);
 					}
 				})
-				.keyBy(new KeySelector<Tuple2<Integer,Integer>, Integer>() {
+				.keyBy(new KeySelector<Tuple2<Integer, Integer>, Integer>() {
 					private static final long serialVersionUID = 1L;
 
 					@Override
@@ -74,26 +76,6 @@ public class CustomKvStateProgram {
 				}).flatMap(new ReducingStateFlatMap()).writeAsText(outputPath);
 
 		env.execute();
-	}
-
-	private static class InfiniteIntegerSource implements ParallelSourceFunction<Integer> {
-		private static final long serialVersionUID = -7517574288730066280L;
-		private volatile boolean running = true;
-
-		@Override
-		public void run(SourceContext<Integer> ctx) throws Exception {
-			int counter = 0;
-			while (running) {
-				synchronized (ctx.getCheckpointLock()) {
-					ctx.collect(counter++);
-				}
-			}
-		}
-
-		@Override
-		public void cancel() {
-			running = false;
-		}
 	}
 
 	private static class ReducingStateFlatMap extends RichFlatMapFunction<Tuple2<Integer, Integer>, Integer> {
@@ -111,7 +93,6 @@ public class CustomKvStateProgram {
 
 			this.kvState = getRuntimeContext().getReducingState(stateDescriptor);
 		}
-
 
 		@Override
 		public void flatMap(Tuple2<Integer, Integer> value, Collector<Integer> out) throws Exception {

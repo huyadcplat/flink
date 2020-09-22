@@ -21,7 +21,7 @@ package org.apache.flink.test.util;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.configuration.SecurityOptions;
-import org.apache.flink.runtime.security.SecurityUtils;
+import org.apache.flink.runtime.security.SecurityConfiguration;
 
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.junit.rules.TemporaryFolder;
@@ -107,8 +107,8 @@ public class SecureTestEnvironment {
 
 			File keytabFile = new File(baseDirForSecureRun, "test-users.keytab");
 			testKeytab = keytabFile.getAbsolutePath();
-			testZkServerPrincipal = "zookeeper/127.0.0.1";
-			testZkClientPrincipal = "zk-client/127.0.0.1";
+			testZkServerPrincipal = "zookeeper/" + hostName;
+			testZkClientPrincipal = "zk-client/" + hostName;
 			testKafkaServerPrincipal = "kafka/" + hostName;
 			hadoopServicePrincipal = "hadoop/" + hostName;
 			testPrincipal = "client/" + hostName;
@@ -144,13 +144,13 @@ public class SecureTestEnvironment {
 			flinkConfig.setBoolean(SecurityOptions.KERBEROS_LOGIN_USETICKETCACHE, false);
 			flinkConfig.setString(SecurityOptions.KERBEROS_LOGIN_PRINCIPAL, testPrincipal);
 			flinkConfig.setString(SecurityOptions.KERBEROS_LOGIN_CONTEXTS, "Client,KafkaClient");
-			SecurityUtils.SecurityConfiguration ctx = new SecurityUtils.SecurityConfiguration(flinkConfig);
+			SecurityConfiguration ctx = new SecurityConfiguration(flinkConfig);
 			TestingSecurityContext.install(ctx, getClientSecurityConfigurationMap());
 
 			populateJavaPropertyVariables();
 
 		} catch (Exception e) {
-			throw new RuntimeException("Exception occured while preparing secure environment.", e);
+			throw new RuntimeException("Exception occurred while preparing secure environment.", e);
 		}
 
 	}

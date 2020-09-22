@@ -20,28 +20,37 @@ package org.apache.flink.streaming.api.datastream;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.Public;
 import org.apache.flink.annotation.PublicEvolving;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.functions.CoGroupFunction;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.common.typeutils.CompatibilityResult;
+import org.apache.flink.api.common.typeutils.CompositeTypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.CompositeTypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.CompositeTypeSerializerUtil;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerConfigSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.operators.translation.WrappingFunction;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.typeutils.TypeExtractor;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
 import org.apache.flink.streaming.api.windowing.assigners.WindowAssigner;
 import org.apache.flink.streaming.api.windowing.evictors.Evictor;
+import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.triggers.Trigger;
 import org.apache.flink.streaming.api.windowing.windows.Window;
 import org.apache.flink.util.Collector;
+import org.apache.flink.util.Preconditions;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 import static java.util.Objects.requireNonNull;
 
@@ -77,7 +86,7 @@ public class CoGroupedStreams<T1, T2> {
 	private final DataStream<T2> input2;
 
 	/**
-	 * Creates new CoGroped data streams, which are the first step towards building a streaming
+	 * Creates new CoGrouped data streams, which are the first step towards building a streaming
 	 * co-group.
 	 *
 	 * @param input1 The first data stream.
@@ -90,9 +99,24 @@ public class CoGroupedStreams<T1, T2> {
 
 	/**
 	 * Specifies a {@link KeySelector} for elements from the first input.
+	 *
+	 * @param keySelector The KeySelector to be used for extracting the first input's key for partitioning.
 	 */
 	public <KEY> Where<KEY> where(KeySelector<T1, KEY> keySelector)  {
-		TypeInformation<KEY> keyType = TypeExtractor.getKeySelectorTypes(keySelector, input1.getType());
+		Preconditions.checkNotNull(keySelector);
+		final TypeInformation<KEY> keyType = TypeExtractor.getKeySelectorTypes(keySelector, input1.getType());
+		return where(keySelector, keyType);
+	}
+
+	/**
+	 * Specifies a {@link KeySelector} for elements from the first input with explicit type information.
+	 *
+	 * @param keySelector The KeySelector to be used for extracting the first input's key for partitioning.
+	 * @param keyType The type information describing the key type.
+	 */
+	public <KEY> Where<KEY> where(KeySelector<T1, KEY> keySelector, TypeInformation<KEY> keyType)  {
+		Preconditions.checkNotNull(keySelector);
+		Preconditions.checkNotNull(keyType);
 		return new Where<>(input1.clean(keySelector), keyType);
 	}
 
@@ -116,12 +140,28 @@ public class CoGroupedStreams<T1, T2> {
 
 		/**
 		 * Specifies a {@link KeySelector} for elements from the second input.
+		 *
+		 * @param keySelector The KeySelector to be used for extracting the second input's key for partitioning.
 		 */
 		public EqualTo equalTo(KeySelector<T2, KEY> keySelector)  {
-			TypeInformation<KEY> otherKey = TypeExtractor.getKeySelectorTypes(keySelector, input2.getType());
-			if (!otherKey.equals(this.keyType)) {
+			Preconditions.checkNotNull(keySelector);
+			final TypeInformation<KEY> otherKey = TypeExtractor.getKeySelectorTypes(keySelector, input2.getType());
+			return equalTo(keySelector, otherKey);
+		}
+
+		/**
+		 * Specifies a {@link KeySelector} for elements from the second input with explicit type information for the key type.
+		 *
+		 * @param keySelector The KeySelector to be used for extracting the key for partitioning.
+		 * @param keyType The type information describing the key type.
+		 */
+		public EqualTo equalTo(KeySelector<T2, KEY> keySelector, TypeInformation<KEY> keyType)  {
+			Preconditions.checkNotNull(keySelector);
+			Preconditions.checkNotNull(keyType);
+
+			if (!keyType.equals(this.keyType)) {
 				throw new IllegalArgumentException("The keys for the two inputs are not equal: " +
-						"first key = " + this.keyType + " , second key = " + otherKey);
+						"first key = " + this.keyType + " , second key = " + keyType);
 			}
 
 			return new EqualTo(input2.clean(keySelector));
@@ -146,7 +186,7 @@ public class CoGroupedStreams<T1, T2> {
 			 */
 			@PublicEvolving
 			public <W extends Window> WithWindow<T1, T2, KEY, W> window(WindowAssigner<? super TaggedUnion<T1, T2>, W> assigner) {
-				return new WithWindow<>(input1, input2, keySelector1, keySelector2, keyType, assigner, null, null);
+				return new WithWindow<>(input1, input2, keySelector1, keySelector2, keyType, assigner, null, null, null);
 			}
 		}
 	}
@@ -178,6 +218,10 @@ public class CoGroupedStreams<T1, T2> {
 
 		private final Evictor<? super TaggedUnion<T1, T2>, ? super W> evictor;
 
+		private final Time allowedLateness;
+
+		private WindowedStream<TaggedUnion<T1, T2>, KEY, W> windowedStream;
+
 		protected WithWindow(DataStream<T1> input1,
 				DataStream<T2> input2,
 				KeySelector<T1, KEY> keySelector1,
@@ -185,7 +229,8 @@ public class CoGroupedStreams<T1, T2> {
 				TypeInformation<KEY> keyType,
 				WindowAssigner<? super TaggedUnion<T1, T2>, W> windowAssigner,
 				Trigger<? super TaggedUnion<T1, T2>, ? super W> trigger,
-				Evictor<? super TaggedUnion<T1, T2>, ? super W> evictor) {
+				Evictor<? super TaggedUnion<T1, T2>, ? super W> evictor,
+				Time allowedLateness) {
 			this.input1 = input1;
 			this.input2 = input2;
 
@@ -196,6 +241,8 @@ public class CoGroupedStreams<T1, T2> {
 			this.windowAssigner = windowAssigner;
 			this.trigger = trigger;
 			this.evictor = evictor;
+
+			this.allowedLateness = allowedLateness;
 		}
 
 		/**
@@ -204,7 +251,7 @@ public class CoGroupedStreams<T1, T2> {
 		@PublicEvolving
 		public WithWindow<T1, T2, KEY, W> trigger(Trigger<? super TaggedUnion<T1, T2>, ? super W> newTrigger) {
 			return new WithWindow<>(input1, input2, keySelector1, keySelector2, keyType,
-					windowAssigner, newTrigger, evictor);
+					windowAssigner, newTrigger, evictor, allowedLateness);
 		}
 
 		/**
@@ -217,7 +264,17 @@ public class CoGroupedStreams<T1, T2> {
 		@PublicEvolving
 		public WithWindow<T1, T2, KEY, W> evictor(Evictor<? super TaggedUnion<T1, T2>, ? super W> newEvictor) {
 			return new WithWindow<>(input1, input2, keySelector1, keySelector2, keyType,
-					windowAssigner, trigger, newEvictor);
+					windowAssigner, trigger, newEvictor, allowedLateness);
+		}
+
+		/**
+		 * Sets the time by which elements are allowed to be late.
+		 * @see WindowedStream#allowedLateness(Time)
+		 */
+		@PublicEvolving
+		public WithWindow<T1, T2, KEY, W> allowedLateness(Time newLateness) {
+			return new WithWindow<>(input1, input2, keySelector1, keySelector2, keyType,
+					windowAssigner, trigger, evictor, newLateness);
 		}
 
 		/**
@@ -230,15 +287,12 @@ public class CoGroupedStreams<T1, T2> {
 		 */
 		public <T> DataStream<T> apply(CoGroupFunction<T1, T2, T> function) {
 
-			TypeInformation<T> resultType = TypeExtractor.getBinaryOperatorReturnType(
-					function,
-					CoGroupFunction.class,
-					true,
-					true,
-					input1.getType(),
-					input2.getType(),
-					"CoGroup",
-					false);
+			TypeInformation<T> resultType = TypeExtractor.getCoGroupReturnTypes(
+				function,
+				input1.getType(),
+				input2.getType(),
+				"CoGroup",
+				false);
 
 			return apply(function, resultType);
 		}
@@ -287,18 +341,21 @@ public class CoGroupedStreams<T1, T2> {
 			DataStream<TaggedUnion<T1, T2>> unionStream = taggedInput1.union(taggedInput2);
 
 			// we explicitly create the keyed stream to manually pass the key type information in
-			WindowedStream<TaggedUnion<T1, T2>, KEY, W> windowOp =
+			windowedStream =
 					new KeyedStream<TaggedUnion<T1, T2>, KEY>(unionStream, unionKeySelector, keyType)
 					.window(windowAssigner);
 
 			if (trigger != null) {
-				windowOp.trigger(trigger);
+				windowedStream.trigger(trigger);
 			}
 			if (evictor != null) {
-				windowOp.evictor(evictor);
+				windowedStream.evictor(evictor);
+			}
+			if (allowedLateness != null) {
+				windowedStream.allowedLateness(allowedLateness);
 			}
 
-			return windowOp.apply(new CoGroupWindowFunction<T1, T2, T, KEY, W>(function), resultType);
+			return windowedStream.apply(new CoGroupWindowFunction<T1, T2, T, KEY, W>(function), resultType);
 		}
 
 		/**
@@ -316,6 +373,16 @@ public class CoGroupedStreams<T1, T2> {
 		@Deprecated
 		public <T> SingleOutputStreamOperator<T> with(CoGroupFunction<T1, T2, T> function, TypeInformation<T> resultType) {
 			return (SingleOutputStreamOperator<T>) apply(function, resultType);
+		}
+
+		@VisibleForTesting
+		Time getAllowedLateness() {
+			return allowedLateness;
+		}
+
+		@VisibleForTesting
+		WindowedStream<TaggedUnion<T1, T2>, KEY, W> getWindowedStream() {
+			return windowedStream;
 		}
 	}
 
@@ -358,6 +425,20 @@ public class CoGroupedStreams<T1, T2> {
 
 		public static <T1, T2> TaggedUnion<T1, T2> two(T2 two) {
 			return new TaggedUnion<>(null, two);
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (obj == this) {
+				return true;
+			}
+
+			if (!(obj instanceof TaggedUnion)) {
+				return false;
+			}
+
+			TaggedUnion other = (TaggedUnion) obj;
+			return Objects.equals(one, other.one) && Objects.equals(two, other.two);
 		}
 	}
 
@@ -437,14 +518,18 @@ public class CoGroupedStreams<T1, T2> {
 		}
 	}
 
-	private static class UnionSerializer<T1, T2> extends TypeSerializer<TaggedUnion<T1, T2>> {
+	/**
+	 * {@link TypeSerializer} for {@link TaggedUnion}.
+	 */
+	@VisibleForTesting
+	@Internal
+	public static class UnionSerializer<T1, T2> extends TypeSerializer<TaggedUnion<T1, T2>> {
 		private static final long serialVersionUID = 1L;
 
 		private final TypeSerializer<T1> oneSerializer;
 		private final TypeSerializer<T2> twoSerializer;
 
-		public UnionSerializer(TypeSerializer<T1> oneSerializer,
-				TypeSerializer<T2> twoSerializer) {
+		public UnionSerializer(TypeSerializer<T1> oneSerializer, TypeSerializer<T2> twoSerializer) {
 			this.oneSerializer = oneSerializer;
 			this.twoSerializer = twoSerializer;
 		}
@@ -456,12 +541,22 @@ public class CoGroupedStreams<T1, T2> {
 
 		@Override
 		public TypeSerializer<TaggedUnion<T1, T2>> duplicate() {
-			return this;
+			TypeSerializer<T1> duplicateOne = oneSerializer.duplicate();
+			TypeSerializer<T2> duplicateTwo = twoSerializer.duplicate();
+
+			// compare reference of nested serializers, if same instances returned, we can reuse
+			// this instance as well
+			if (duplicateOne != oneSerializer || duplicateTwo != twoSerializer) {
+				return new UnionSerializer<>(duplicateOne, duplicateTwo);
+			} else {
+				return this;
+			}
 		}
 
 		@Override
 		public TaggedUnion<T1, T2> createInstance() {
-			return null;
+			//we arbitrarily always create instance of one
+			return TaggedUnion.one(oneSerializer.createInstance());
 		}
 
 		@Override
@@ -540,31 +635,95 @@ public class CoGroupedStreams<T1, T2> {
 			if (obj instanceof UnionSerializer) {
 				UnionSerializer<T1, T2> other = (UnionSerializer<T1, T2>) obj;
 
-				return other.canEqual(this) && oneSerializer.equals(other.oneSerializer) && twoSerializer.equals(other.twoSerializer);
+				return oneSerializer.equals(other.oneSerializer) && twoSerializer.equals(other.twoSerializer);
 			} else {
 				return false;
 			}
 		}
 
 		@Override
-		public boolean canEqual(Object obj) {
-			return obj instanceof UnionSerializer;
+		public TypeSerializerSnapshot<TaggedUnion<T1, T2>> snapshotConfiguration() {
+			return new UnionSerializerSnapshot<>(this);
+		}
+	}
+
+	/**
+	 * The {@link TypeSerializerConfigSnapshot} for the {@link UnionSerializer}.
+	 *
+	 * @deprecated this snapshot class is no longer in use, and is maintained only for backwards compatibility.
+	 *             It is fully replaced by {@link UnionSerializerSnapshot}.
+	 */
+	@Deprecated
+	public static class UnionSerializerConfigSnapshot<T1, T2>
+		extends CompositeTypeSerializerConfigSnapshot<TaggedUnion<T1, T2>> {
+
+		private static final int VERSION = 1;
+
+		/**
+		 * This empty nullary constructor is required for deserializing the configuration.
+		 */
+		public UnionSerializerConfigSnapshot() {
+		}
+
+		public UnionSerializerConfigSnapshot(TypeSerializer<T1> oneSerializer, TypeSerializer<T2> twoSerializer) {
+			super(oneSerializer, twoSerializer);
 		}
 
 		@Override
-		public TypeSerializerConfigSnapshot snapshotConfiguration() {
-			throw new UnsupportedOperationException("This serializer is not registered for managed state.");
+		public TypeSerializerSchemaCompatibility<TaggedUnion<T1, T2>> resolveSchemaCompatibility(TypeSerializer<TaggedUnion<T1, T2>> newSerializer) {
+			List<Tuple2<TypeSerializer<?>, TypeSerializerSnapshot<?>>> nestedSerializersAndConfigs = getNestedSerializersAndConfigs();
+
+			return CompositeTypeSerializerUtil.delegateCompatibilityCheckToNewSnapshot(
+				newSerializer,
+				new UnionSerializerSnapshot<>(),
+				nestedSerializersAndConfigs.get(0).f1,
+				nestedSerializersAndConfigs.get(1).f1
+			);
 		}
 
 		@Override
-		public CompatibilityResult<TaggedUnion<T1, T2>> ensureCompatibility(TypeSerializerConfigSnapshot configSnapshot) {
-			throw new UnsupportedOperationException("This serializer is not registered for managed state.");
+		public int getVersion() {
+			return VERSION;
+		}
+	}
+
+	/**
+	 * The {@link TypeSerializerSnapshot} for the {@link UnionSerializer}.
+	 */
+	public static class UnionSerializerSnapshot<T1, T2>
+		extends CompositeTypeSerializerSnapshot<TaggedUnion<T1, T2>, UnionSerializer<T1, T2>> {
+
+		private static final int VERSION = 2;
+
+		@SuppressWarnings("WeakerAccess")
+		public UnionSerializerSnapshot() {
+			super(UnionSerializer.class);
+		}
+
+		UnionSerializerSnapshot(UnionSerializer<T1, T2> serializerInstance) {
+			super(serializerInstance);
+		}
+
+		@Override
+		protected int getCurrentOuterSnapshotVersion() {
+			return VERSION;
+		}
+
+		@Override
+		protected TypeSerializer<?>[] getNestedSerializers(UnionSerializer<T1, T2> outerSerializer) {
+			return new TypeSerializer[]{outerSerializer.oneSerializer, outerSerializer.twoSerializer};
+		}
+
+		@SuppressWarnings("unchecked")
+		@Override
+		protected UnionSerializer<T1, T2> createOuterSerializerWithNestedSerializers(TypeSerializer<?>[] nestedSerializers) {
+			return new UnionSerializer<>((TypeSerializer<T1>) nestedSerializers[0], (TypeSerializer<T2>) nestedSerializers[1]);
 		}
 	}
 
 	// ------------------------------------------------------------------------
 	//  Utility functions that implement the CoGroup logic based on the tagged
-	//  untion window reduce
+	//  union window reduce
 	// ------------------------------------------------------------------------
 
 	private static class Input1Tagger<T1, T2> implements MapFunction<T1, TaggedUnion<T1, T2>> {

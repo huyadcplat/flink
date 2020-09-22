@@ -16,22 +16,23 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.core.fs.local;
 
-import java.io.File;
-
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.core.fs.BlockLocation;
 import org.apache.flink.core.fs.FileStatus;
 import org.apache.flink.core.fs.FileSystem;
+import org.apache.flink.core.fs.LocatedFileStatus;
 import org.apache.flink.core.fs.Path;
+
+import java.io.File;
 
 /**
  * The class <code>LocalFileStatus</code> provides an implementation of the {@link FileStatus} interface
  * for the local file system.
  */
 @Internal
-public class LocalFileStatus implements FileStatus {
+public class LocalFileStatus implements LocatedFileStatus {
 
 	/**
 	 * The file this file status belongs to.
@@ -44,8 +45,13 @@ public class LocalFileStatus implements FileStatus {
 	private final Path path;
 
 	/**
+	 * Cached length field, to avoid repeated native/syscalls.
+	 */
+	private final long len;
+
+	/**
 	 * Creates a <code>LocalFileStatus</code> object from a given {@link File} object.
-	 * 
+	 *
 	 * @param f
 	 *        the {@link File} object this <code>LocalFileStatus</code> refers to
 	 * @param fs
@@ -54,6 +60,7 @@ public class LocalFileStatus implements FileStatus {
 	public LocalFileStatus(final File f, final FileSystem fs) {
 		this.file = f;
 		this.path = new Path(fs.getUri().getScheme() + ":" + f.toURI().getPath());
+		this.len = f.length();
 	}
 
 	@Override
@@ -63,12 +70,12 @@ public class LocalFileStatus implements FileStatus {
 
 	@Override
 	public long getBlockSize() {
-		return this.file.length();
+		return this.len;
 	}
 
 	@Override
 	public long getLen() {
-		return this.file.length();
+		return this.len;
 	}
 
 	@Override
@@ -89,6 +96,14 @@ public class LocalFileStatus implements FileStatus {
 	@Override
 	public Path getPath() {
 		return this.path;
+	}
+
+	@Override
+	public BlockLocation[] getBlockLocations() {
+		// we construct this lazily here and don't cache it, because it is used only rarely
+		return new BlockLocation[] {
+			new LocalBlockLocation(len)
+		};
 	}
 
 	public File getFile() {

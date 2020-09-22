@@ -17,6 +17,8 @@
 
 package org.apache.flink.streaming.connectors.elasticsearch;
 
+import org.apache.flink.annotation.PublicEvolving;
+
 import org.elasticsearch.action.ActionRequest;
 
 import java.io.Serializable;
@@ -26,8 +28,7 @@ import java.io.Serializable;
  * {@link ActionRequest ActionRequests} should be handled, e.g. dropping them, reprocessing malformed documents, or
  * simply requesting them to be sent to Elasticsearch again if the failure is only temporary.
  *
- * <p>
- * Example:
+ * <p>Example:
  *
  * <pre>{@code
  *
@@ -35,10 +36,10 @@ import java.io.Serializable;
  *
  *		@Override
  *		void onFailure(ActionRequest action, Throwable failure, int restStatusCode, RequestIndexer indexer) throws Throwable {
- *			if (ExceptionUtils.containsThrowable(failure, EsRejectedExecutionException.class)) {
+ *			if (ExceptionUtils.findThrowable(failure, EsRejectedExecutionException.class).isPresent()) {
  *				// full queue; re-add document for indexing
  *				indexer.add(action);
- *			} else if (ExceptionUtils.containsThrowable(failure, ElasticsearchParseException.class)) {
+ *			} else if (ExceptionUtils.findThrowable(failure, ElasticsearchParseException.class).isPresent()) {
  *				// malformed document; simply drop request without failing sink
  *			} else {
  *				// for all other failures, fail the sink;
@@ -50,15 +51,14 @@ import java.io.Serializable;
  *
  * }</pre>
  *
- * <p>
- * The above example will let the sink re-add requests that failed due to queue capacity saturation and drop requests
+ * <p>The above example will let the sink re-add requests that failed due to queue capacity saturation and drop requests
  * with malformed documents, without failing the sink. For all other failures, the sink will fail.
  *
- * <p>
- * Note: For Elasticsearch 1.x, it is not feasible to match the type of the failure because the exact type
+ * <p>Note: For Elasticsearch 1.x, it is not feasible to match the type of the failure because the exact type
  * could not be retrieved through the older version Java client APIs (thus, the types will be general {@link Exception}s
  * and only differ in the failure message). In this case, it is recommended to match on the provided REST status code.
  */
+@PublicEvolving
 public interface ActionRequestFailureHandler extends Serializable {
 
 	/**

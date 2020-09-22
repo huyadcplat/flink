@@ -18,8 +18,9 @@
 
 package org.apache.flink.cep.nfa;
 
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.common.typeutils.base.IntSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.base.TypeSerializerSingleton;
 import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
@@ -31,7 +32,7 @@ import java.util.Arrays;
 /**
  * Versioning scheme which allows to retrieve dependencies between different versions.
  *
- * A dewey number consists of a sequence of digits d1.d2.d3. ... .dn. A dewey number v is compatible
+ * <p>A dewey number consists of a sequence of digits d1.d2.d3. ... .dn. A dewey number v is compatible
  * to v' iff v contains v' as a prefix or if both dewey number differ only in the last digit and
  * the last digit of v is greater than v'.
  *
@@ -58,7 +59,7 @@ public class DeweyNumber implements Serializable {
 	/**
 	 * Checks whether this dewey number is compatible to the other dewey number.
 	 *
-	 * True iff this contains other as a prefix or iff they differ only in the last digit whereas
+	 * <p>True iff this contains other as a prefix or iff they differ only in the last digit whereas
 	 * the last digit of this is greater than the last digit of other.
 	 *
 	 * @param other The other dewey number to check compatibility against
@@ -90,6 +91,10 @@ public class DeweyNumber implements Serializable {
 		}
 	}
 
+	public int getRun() {
+		return deweyNumber[0];
+	}
+
 	public int length() {
 		return deweyNumber.length;
 	}
@@ -106,7 +111,7 @@ public class DeweyNumber implements Serializable {
 
 	/**
 	 * Creates a new dewey number from this such that its last digit is increased by the supplied
-	 * number
+	 * number.
 	 *
 	 * @param times how many times to increase the Dewey number
 	 * @return A new dewey number derived from this whose last digit is increased by given number
@@ -170,9 +175,9 @@ public class DeweyNumber implements Serializable {
 	public static DeweyNumber fromString(final String deweyNumberString) {
 		String[] splits = deweyNumberString.split("\\.");
 
-		if (splits.length == 0) {
+		if (splits.length == 1) {
 			return new DeweyNumber(Integer.parseInt(deweyNumberString));
-		} else {
+		} else if (splits.length > 0) {
 			int[] deweyNumber = new int[splits.length];
 
 			for (int i = 0; i < splits.length; i++) {
@@ -180,6 +185,8 @@ public class DeweyNumber implements Serializable {
 			}
 
 			return new DeweyNumber(deweyNumber);
+		} else {
+			throw new IllegalArgumentException("Failed to parse " + deweyNumberString + " as a Dewey number");
 		}
 	}
 
@@ -190,7 +197,9 @@ public class DeweyNumber implements Serializable {
 
 		private static final long serialVersionUID = -5086792497034943656L;
 
-		private final IntSerializer elemSerializer = IntSerializer.INSTANCE;
+		public static final DeweyNumberSerializer INSTANCE = new DeweyNumberSerializer();
+
+		private DeweyNumberSerializer() {}
 
 		@Override
 		public boolean isImmutableType() {
@@ -222,7 +231,7 @@ public class DeweyNumber implements Serializable {
 			final int size = record.length();
 			target.writeInt(size);
 			for (int i = 0; i < size; i++) {
-				elemSerializer.serialize(record.deweyNumber[i], target);
+				target.writeInt(record.deweyNumber[i]);
 			}
 		}
 
@@ -231,7 +240,7 @@ public class DeweyNumber implements Serializable {
 			final int size = source.readInt();
 			int[] number = new int[size];
 			for (int i = 0; i < size; i++) {
-				number[i] = elemSerializer.deserialize(source);
+				number[i] = source.readInt();
 			}
 			return new DeweyNumber(number);
 		}
@@ -246,7 +255,7 @@ public class DeweyNumber implements Serializable {
 			final int size = source.readInt();
 			target.writeInt(size);
 			for (int i = 0; i < size; i++) {
-				elemSerializer.copy(source, target);
+				target.writeInt(source.readInt());
 			}
 		}
 
@@ -255,14 +264,22 @@ public class DeweyNumber implements Serializable {
 			return obj == this || obj.getClass().equals(getClass());
 		}
 
-		@Override
-		public boolean canEqual(Object obj) {
-			return true;
-		}
+		// -----------------------------------------------------------------------------------
 
 		@Override
-		public int hashCode() {
-			return elemSerializer.hashCode();
+		public TypeSerializerSnapshot<DeweyNumber> snapshotConfiguration() {
+			return new DeweyNumberSerializerSnapshot();
+		}
+
+		/**
+		 * Serializer configuration snapshot for compatibility and format evolution.
+		 */
+		@SuppressWarnings("WeakerAccess")
+		public static final class DeweyNumberSerializerSnapshot extends SimpleTypeSerializerSnapshot<DeweyNumber> {
+
+			public DeweyNumberSerializerSnapshot() {
+				super(() -> INSTANCE);
+			}
 		}
 	}
 }

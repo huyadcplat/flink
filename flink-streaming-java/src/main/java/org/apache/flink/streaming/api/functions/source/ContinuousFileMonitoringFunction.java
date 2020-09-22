@@ -32,7 +32,6 @@ import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
-import org.apache.flink.streaming.api.checkpoint.CheckpointedRestoring;
 import org.apache.flink.util.Preconditions;
 
 import org.slf4j.Logger;
@@ -66,7 +65,7 @@ import java.util.TreeMap;
  */
 @Internal
 public class ContinuousFileMonitoringFunction<OUT>
-	extends RichSourceFunction<TimestampedFileInputSplit> implements CheckpointedFunction, CheckpointedRestoring<Long> {
+	extends RichSourceFunction<TimestampedFileInputSplit> implements CheckpointedFunction {
 
 	private static final long serialVersionUID = 1L;
 
@@ -95,7 +94,7 @@ public class ContinuousFileMonitoringFunction<OUT>
 	private final FileProcessingMode watchType;
 
 	/** The maximum file modification time seen so far. */
-	private volatile long globalModificationTime = Long.MIN_VALUE;
+	private volatile long globalModificationTime;
 
 	private transient Object checkpointLock;
 
@@ -104,10 +103,19 @@ public class ContinuousFileMonitoringFunction<OUT>
 	private transient ListState<Long> checkpointedState;
 
 	public ContinuousFileMonitoringFunction(
+			FileInputFormat<OUT> format,
+			FileProcessingMode watchType,
+			int readerParallelism,
+			long interval) {
+		this(format, watchType, readerParallelism, interval, Long.MIN_VALUE);
+	}
+
+	public ContinuousFileMonitoringFunction(
 		FileInputFormat<OUT> format,
 		FileProcessingMode watchType,
 		int readerParallelism,
-		long interval) {
+		long interval,
+		long globalModificationTime) {
 
 		Preconditions.checkArgument(
 			watchType == FileProcessingMode.PROCESS_ONCE || interval >= MIN_MONITORING_INTERVAL,
@@ -115,13 +123,17 @@ public class ContinuousFileMonitoringFunction<OUT>
 				"allowed one (" + MIN_MONITORING_INTERVAL + " ms)."
 		);
 
+		Preconditions.checkArgument(
+			format.getFilePaths().length == 1,
+			"FileInputFormats with multiple paths are not supported yet.");
+
 		this.format = Preconditions.checkNotNull(format, "Unspecified File Input Format.");
-		this.path = Preconditions.checkNotNull(format.getFilePath().toString(), "Unspecified Path.");
+		this.path = Preconditions.checkNotNull(format.getFilePaths()[0].toString(), "Unspecified Path.");
 
 		this.interval = interval;
 		this.watchType = watchType;
 		this.readerParallelism = Math.max(readerParallelism, 1);
-		this.globalModificationTime = Long.MIN_VALUE;
+		this.globalModificationTime = globalModificationTime;
 	}
 
 	@VisibleForTesting
@@ -285,7 +297,7 @@ public class ContinuousFileMonitoringFunction<OUT>
 	 * Returns the paths of the files not yet processed.
 	 * @param fileSystem The filesystem where the monitored directory resides.
 	 */
-	private Map<Path, FileStatus> listEligibleFiles(FileSystem fileSystem, Path path) throws IOException {
+	private Map<Path, FileStatus> listEligibleFiles(FileSystem fileSystem, Path path) {
 
 		final FileStatus[] statuses;
 		try {
@@ -337,9 +349,12 @@ public class ContinuousFileMonitoringFunction<OUT>
 	@Override
 	public void close() throws Exception {
 		super.close();
-		synchronized (checkpointLock) {
-			globalModificationTime = Long.MAX_VALUE;
-			isRunning = false;
+
+		if (checkpointLock != null) {
+			synchronized (checkpointLock) {
+				globalModificationTime = Long.MAX_VALUE;
+				isRunning = false;
+			}
 		}
 
 		if (LOG.isDebugEnabled()) {
@@ -374,13 +389,5 @@ public class ContinuousFileMonitoringFunction<OUT>
 		if (LOG.isDebugEnabled()) {
 			LOG.debug("{} checkpointed {}.", getClass().getSimpleName(), globalModificationTime);
 		}
-	}
-
-	@Override
-	public void restoreState(Long state) throws Exception {
-		this.globalModificationTime = state;
-
-		LOG.info("{} (taskIdx={}) restored global modification time from an older Flink version: {}",
-			getClass().getSimpleName(), getRuntimeContext().getIndexOfThisSubtask(), globalModificationTime);
 	}
 }

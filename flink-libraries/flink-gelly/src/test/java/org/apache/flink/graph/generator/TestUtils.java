@@ -35,7 +35,12 @@ import java.util.List;
 
 import static org.junit.Assert.assertTrue;
 
+/**
+ * Utility methods for testing graph algorithms.
+ */
 public final class TestUtils {
+
+	private TestUtils() {}
 
 	/**
 	 * Compare graph vertices and edges against expected values.
@@ -48,14 +53,12 @@ public final class TestUtils {
 	 * @param <EV> the value type for edges
 	 * @throws Exception
 	 */
-	public static <K, VV, EV> void compareGraph(Graph<K, VV, EV> graph, String expectedVertices, String expectedEdges)
-			throws Exception {
+	public static <K, VV, EV> void compareGraph(Graph<K, VV, EV> graph, String expectedVertices, String expectedEdges) throws Exception {
 		compareVertices(graph, expectedVertices);
 		compareEdges(graph, expectedEdges);
 	}
 
-	private static <K, VV, EV> void compareVertices(Graph<K, VV, EV> graph, String expectedVertices)
-			throws Exception {
+	private static <K, VV, EV> void compareVertices(Graph<K, VV, EV> graph, String expectedVertices) throws Exception {
 		if (expectedVertices != null) {
 			List<Vertex<K, VV>> vertices = graph.getVertices().collect();
 			List<String> resultVertices = new ArrayList<>(vertices.size());
@@ -68,8 +71,7 @@ public final class TestUtils {
 		}
 	}
 
-	private static <K, VV, EV> void compareEdges(Graph<K, VV, EV> graph, String expectedEdges)
-			throws Exception {
+	private static <K, VV, EV> void compareEdges(Graph<K, VV, EV> graph, String expectedEdges) throws Exception {
 		if (expectedEdges != null) {
 			List<Edge<K, EV>> edges = graph.getEdges().collect();
 			List<String> resultEdges = new ArrayList<>(edges.size());

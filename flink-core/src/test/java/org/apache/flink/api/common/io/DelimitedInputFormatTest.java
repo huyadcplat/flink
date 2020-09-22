@@ -19,10 +19,15 @@
 package org.apache.flink.api.common.io;
 
 import org.apache.commons.lang3.StringUtils;
+
+import org.apache.flink.api.common.io.FileInputFormat.FileBaseStatistics;
+import org.apache.flink.api.common.io.statistics.BaseStatistics;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.FileInputSplit;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.util.function.FunctionWithException;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -45,7 +50,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 public class DelimitedInputFormatTest {
 	
@@ -402,6 +406,118 @@ public class DelimitedInputFormatTest {
 		assertEquals(Arrays.asList(myString.split("\n")), result);
 	}
 
+	@Test
+	public void testDelimiterOnBufferBoundary() throws IOException {
+
+		testDelimiterOnBufferBoundary(fileContent -> createTempFile(fileContent));
+	}
+
+	@Test
+	public void testDelimiterOnBufferBoundaryWithWholeFileSplit() throws IOException {
+
+		testDelimiterOnBufferBoundary(fileContent -> {
+			final FileInputSplit split = createTempFile(fileContent);
+			return new FileInputSplit(0, split.getPath(), 0, -1, split.getHostnames());
+		});
+	}
+
+	private void testDelimiterOnBufferBoundary(FunctionWithException<String, FileInputSplit, IOException> splitCreator) throws IOException {
+		String[] records = new String[]{"1234567890<DEL?NO!>1234567890", "1234567890<DEL?NO!>1234567890", "<DEL?NO!>"};
+		String delimiter = "<DELIM>";
+		String fileContent = StringUtils.join(records, delimiter);
+
+
+		final FileInputSplit split = splitCreator.apply(fileContent);
+		final Configuration parameters = new Configuration();
+
+		format.setBufferSize(12);
+		format.setDelimiter(delimiter);
+		format.configure(parameters);
+		format.open(split);
+
+		for (String record : records) {
+			String value = format.nextRecord(null);
+			assertEquals(record, value);
+		}
+
+		assertNull(format.nextRecord(null));
+		assertTrue(format.reachedEnd());
+
+		format.close();
+	}
+
+	// -- Statistics --//
+
+	@Test
+	public void testGetStatistics() throws IOException {
+		final String myString = "my mocked line 1\nmy mocked line 2\n";
+		final long size = myString.length();
+		final Path filePath = createTempFilePath(myString);
+
+		final String myString2 = "my mocked line 1\nmy mocked line 2\nanother mocked line3\n";
+		final long size2 = myString2.length();
+		final Path filePath2 = createTempFilePath(myString2);
+
+		final long totalSize = size + size2;
+
+		DelimitedInputFormat<String> format = new MyTextInputFormat();
+		format.setFilePaths(filePath.toUri().toString(), filePath2.toUri().toString());
+
+		FileInputFormat.FileBaseStatistics stats = format.getStatistics(null);
+		assertNotNull(stats);
+		assertEquals("The file size from the statistics is wrong.", totalSize, stats.getTotalInputSize());
+	}
+	
+	@Test
+	public void testGetStatisticsFileDoesNotExist() throws IOException {
+		DelimitedInputFormat<String> format = new MyTextInputFormat();
+		format.setFilePaths("file:///path/does/not/really/exist", "file:///another/path/that/does/not/exist");
+
+		FileBaseStatistics stats = format.getStatistics(null);
+		assertNull("The file statistics should be null.", stats);
+	}
+
+	@Test
+	public void testGetStatisticsSingleFileWithCachedVersion() throws IOException {
+		final String myString = "my mocked line 1\nmy mocked line 2\n";
+		final Path tempFile = createTempFilePath(myString);
+		final long size = myString.length();
+		final long fakeSize = 10065;
+
+		DelimitedInputFormat<String> format = new MyTextInputFormat();
+		format.setFilePath(tempFile);
+		format.configure(new Configuration());
+
+		FileBaseStatistics stats = format.getStatistics(null);
+		assertNotNull(stats);
+		assertEquals("The file size from the statistics is wrong.", size, stats.getTotalInputSize());
+		
+		format = new MyTextInputFormat();
+		format.setFilePath(tempFile);
+		format.configure(new Configuration());
+		
+		FileBaseStatistics newStats = format.getStatistics(stats);
+		assertEquals("Statistics object was changed.", newStats, stats);
+		
+		// insert fake stats with the correct modification time. the call should return the fake stats
+		format = new MyTextInputFormat();
+		format.setFilePath(tempFile);
+		format.configure(new Configuration());
+		
+		FileBaseStatistics fakeStats = new FileBaseStatistics(stats.getLastModificationTime(), fakeSize, BaseStatistics.AVG_RECORD_BYTES_UNKNOWN);
+		BaseStatistics latest = format.getStatistics(fakeStats);
+		assertEquals("The file size from the statistics is wrong.", fakeSize, latest.getTotalInputSize());
+		
+		// insert fake stats with the expired modification time. the call should return new accurate stats
+		format = new MyTextInputFormat();
+		format.setFilePath(tempFile);
+		format.configure(new Configuration());
+		
+		FileBaseStatistics outDatedFakeStats = new FileBaseStatistics(stats.getLastModificationTime() - 1, fakeSize, BaseStatistics.AVG_RECORD_BYTES_UNKNOWN);
+		BaseStatistics reGathered = format.getStatistics(outDatedFakeStats);
+		assertEquals("The file size from the statistics is wrong.", size, reGathered.getTotalInputSize());
+	}
+	
 	static FileInputSplit createTempFile(String contents) throws IOException {
 		File tempFile = File.createTempFile("test_contents", "tmp");
 		tempFile.deleteOnExit();
@@ -431,5 +547,20 @@ public class DelimitedInputFormatTest {
 		public String readRecord(String reuse, byte[] bytes, int offset, int numBytes) {
 			return new String(bytes, offset, numBytes, ConfigConstants.DEFAULT_CHARSET);
 		}
+
+		@Override
+		public boolean supportsMultiPaths() {
+			return true;
+		}
+	}
+	
+	private static Path createTempFilePath(String contents) throws IOException {
+		File tempFile = File.createTempFile("test_contents", "tmp");
+		tempFile.deleteOnExit();
+
+		try (OutputStreamWriter wrt = new OutputStreamWriter(new FileOutputStream(tempFile))) {
+			wrt.write(contents);
+		}
+		return new Path(tempFile.toURI().toString());
 	}
 }

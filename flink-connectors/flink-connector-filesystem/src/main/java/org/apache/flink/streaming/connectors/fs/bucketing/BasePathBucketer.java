@@ -15,15 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.connectors.fs.bucketing;
 
 import org.apache.flink.streaming.connectors.fs.Clock;
+
 import org.apache.hadoop.fs.Path;
 
 /**
  * A {@link Bucketer} that does not perform any
  * bucketing of files. All files are written to the base path.
  */
+@Deprecated
 public class BasePathBucketer<T> implements Bucketer<T> {
 	private static final long serialVersionUID = 1L;
 

@@ -19,14 +19,17 @@
 package org.apache.flink.graph.drivers;
 
 import org.apache.flink.client.program.ProgramParametrizationException;
+
 import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+/**
+ * Tests for {@link HITS}.
+ */
 @RunWith(Parameterized.class)
-public class HITSITCase
-extends DriverBaseITCase {
+public class HITSITCase extends DriverBaseITCase {
 
 	public HITSITCase(String idType, TestExecutionMode mode) {
 		super(idType, mode);
@@ -50,7 +53,7 @@ extends DriverBaseITCase {
 	}
 
 	@Test
-	public void testPrintWithSmallRMatGraph() throws Exception {
+	public void testPrintWithRMatGraph() throws Exception {
 		// skip 'char' since it is not printed as a number
 		Assume.assumeFalse(idType.equals("char") || idType.equals("nativeChar"));
 
@@ -58,13 +61,7 @@ extends DriverBaseITCase {
 	}
 
 	@Test
-	public void testPrintWithLargeRMatGraph() throws Exception {
-		// skip 'char' since it is not printed as a number
-		Assume.assumeFalse(idType.equals("char") || idType.equals("nativeChar"));
-
-		// skip 'byte' which cannot store vertex IDs for scale > 8
-		Assume.assumeFalse(idType.equals("byte") || idType.equals("nativeByte"));
-
-		expectedCount(parameters(12, "print"), 3349);
+	public void testParallelism() throws Exception {
+		TestUtils.verifyParallelism(parameters(8, "print"));
 	}
 }

@@ -44,10 +44,6 @@ public class FileSystemStateStorageHelper<T extends Serializable> implements Ret
 
 	private final FileSystem fs;
 
-	public FileSystemStateStorageHelper(String rootPath, String prefix) throws IOException {
-		this(new Path(rootPath), prefix);
-	}
-
 	public FileSystemStateStorageHelper(Path rootPath, String prefix) throws IOException {
 		this.rootPath = Preconditions.checkNotNull(rootPath, "Root path");
 		this.prefix = Preconditions.checkNotNull(prefix, "Prefix");
@@ -62,7 +58,7 @@ public class FileSystemStateStorageHelper<T extends Serializable> implements Ret
 		for (int attempt = 0; attempt < 10; attempt++) {
 			Path filePath = getNewFilePath();
 
-			try (FSDataOutputStream outStream = fs.create(filePath, false)) {
+			try (FSDataOutputStream outStream = fs.create(filePath, FileSystem.WriteMode.NO_OVERWRITE)) {
 				InstantiationUtil.serializeObject(outStream, state);
 				return new RetrievableStreamStateHandle<T>(filePath, outStream.getPos());
 			}

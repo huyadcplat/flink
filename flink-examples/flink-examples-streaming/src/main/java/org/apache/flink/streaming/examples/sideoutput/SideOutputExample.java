@@ -21,7 +21,6 @@ import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.examples.java.wordcount.util.WordCountData;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
@@ -29,11 +28,12 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.ProcessFunction;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.examples.wordcount.util.WordCountData;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 
 /**
- * An example that illustrates the use of side outputs.
+ * An example that illustrates the use of side output.
  *
  * <p>This is a modified version of {@link org.apache.flink.streaming.examples.windowing.WindowWordCount}
  * that has a filter in the tokenizer and only emits some words for counting
@@ -95,7 +95,7 @@ public class SideOutputExample {
 				});
 
 		DataStream<Tuple2<String, Integer>> counts = tokenized
-				.keyBy(0)
+				.keyBy(value -> value.f0)
 				.window(TumblingEventTimeWindows.of(Time.seconds(5)))
 				// group by the tuple field "0" and sum up tuple field "1"
 				.sum(1);

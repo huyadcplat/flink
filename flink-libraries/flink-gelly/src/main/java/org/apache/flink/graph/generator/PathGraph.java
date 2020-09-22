@@ -28,7 +28,7 @@ import org.apache.flink.util.Preconditions;
  * @see <a href="http://mathworld.wolfram.com/PathGraph.html">Path Graph at Wolfram MathWorld</a>
  */
 public class PathGraph
-extends AbstractGraphGenerator<LongValue, NullValue, NullValue> {
+extends GraphGeneratorBase<LongValue, NullValue, NullValue> {
 
 	public static final int MINIMUM_VERTEX_COUNT = 2;
 
@@ -36,14 +36,14 @@ extends AbstractGraphGenerator<LongValue, NullValue, NullValue> {
 	private final ExecutionEnvironment env;
 
 	// Required configuration
-	private long vertexCount;
+	private final long vertexCount;
 
 	/**
 	 * An undirected {@link Graph} with {@code n} vertices where each vertex
 	 * v<sub>i</sub> connects to adjacent vertices v<sub>i+1</sub> when
 	 * {@code i < n-1} and v<sub>i-1</sub> when {@code i > 0}.
-	 * <p>
-	 * A {@code PathGraph} is distinguished from a {@code CycleGraph} in that
+	 *
+	 * <p>A {@code PathGraph} is distinguished from a {@code CycleGraph} in that
 	 * the first and last vertex are not connected, breaking the cycle.
 	 *
 	 * @param env the Flink execution environment

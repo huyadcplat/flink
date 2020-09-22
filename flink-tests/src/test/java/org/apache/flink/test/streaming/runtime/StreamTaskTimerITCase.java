@@ -29,10 +29,11 @@ import org.apache.flink.streaming.api.operators.ChainingStrategy;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
-import org.apache.flink.streaming.runtime.tasks.ProcessingTimeCallback;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.runtime.tasks.ProcessingTimeCallback;
 import org.apache.flink.streaming.runtime.tasks.TimerException;
-import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase;
+import org.apache.flink.test.util.AbstractTestBase;
+import org.apache.flink.util.ExceptionUtils;
 
 import org.junit.Assert;
 import org.junit.Test;
@@ -41,24 +42,25 @@ import org.junit.runners.Parameterized;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.concurrent.Semaphore;
+
+import static org.junit.Assert.assertTrue;
 
 /**
  * Tests for the timer service of {@code StreamTask}.
  *
- * <p>
- * These tests ensure that exceptions are properly forwarded from the timer thread to
+ * <p>These tests ensure that exceptions are properly forwarded from the timer thread to
  * the task thread and that operator methods are not invoked concurrently.
  */
 @RunWith(Parameterized.class)
-public class StreamTaskTimerITCase extends StreamingMultipleProgramsTestBase {
+public class StreamTaskTimerITCase extends AbstractTestBase {
 
 	private final TimeCharacteristic timeCharacteristic;
-	
+
 	public StreamTaskTimerITCase(TimeCharacteristic characteristic) {
 		timeCharacteristic = characteristic;
 	}
-
 
 	/**
 	 * Note: this test fails if we don't check for exceptions in the source contexts and do not
@@ -66,7 +68,7 @@ public class StreamTaskTimerITCase extends StreamingMultipleProgramsTestBase {
 	 */
 	@Test
 	public void testOperatorChainedToSource() throws Exception {
-		
+
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 		env.setStreamTimeCharacteristic(timeCharacteristic);
 		env.setParallelism(1);
@@ -75,27 +77,26 @@ public class StreamTaskTimerITCase extends StreamingMultipleProgramsTestBase {
 
 		source.transform("Custom Operator", BasicTypeInfo.STRING_TYPE_INFO, new TimerOperator(ChainingStrategy.ALWAYS));
 
-		boolean testSuccess = false;
 		try {
 			env.execute("Timer test");
 		} catch (JobExecutionException e) {
-			if (e.getCause() instanceof TimerException) {
-				TimerException te = (TimerException) e.getCause();
-				if (te.getCause() instanceof RuntimeException) {
-					RuntimeException re = (RuntimeException) te.getCause();
-					if (re.getMessage().equals("TEST SUCCESS")) {
-						testSuccess = true;
-					} else {
-						throw e;
-					}
-				} else {
-					throw e;
-				}
-			} else {
+			verifyJobExecutionException(e);
+		}
+	}
+
+	private void verifyJobExecutionException(JobExecutionException e) throws JobExecutionException {
+		final Optional<TimerException> optionalTimerException = ExceptionUtils.findThrowable(e, TimerException.class);
+		assertTrue(optionalTimerException.isPresent());
+
+		TimerException te = optionalTimerException.get();
+		if (te.getCause() instanceof RuntimeException) {
+			RuntimeException re = (RuntimeException) te.getCause();
+			if (!re.getMessage().equals("TEST SUCCESS")) {
 				throw e;
 			}
+		} else {
+			throw e;
 		}
-		Assert.assertTrue(testSuccess);
 	}
 
 	/**
@@ -112,29 +113,13 @@ public class StreamTaskTimerITCase extends StreamingMultipleProgramsTestBase {
 
 		source.transform("Custom Operator", BasicTypeInfo.STRING_TYPE_INFO, new TimerOperator(ChainingStrategy.NEVER));
 
-		boolean testSuccess = false;
 		try {
 			env.execute("Timer test");
 		} catch (JobExecutionException e) {
-			if (e.getCause() instanceof TimerException) {
-				TimerException te = (TimerException) e.getCause();
-				if (te.getCause() instanceof RuntimeException) {
-					RuntimeException re = (RuntimeException) te.getCause();
-					if (re.getMessage().equals("TEST SUCCESS")) {
-						testSuccess = true;
-					} else {
-						throw e;
-					}
-				} else {
-					throw e;
-				}
-			} else {
-				throw e;
-			}
+			verifyJobExecutionException(e);
 		}
-		Assert.assertTrue(testSuccess);
 	}
-	
+
 	@Test
 	public void testTwoInputOperatorWithoutChaining() throws Exception {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
@@ -148,30 +133,14 @@ public class StreamTaskTimerITCase extends StreamingMultipleProgramsTestBase {
 				BasicTypeInfo.STRING_TYPE_INFO,
 				new TwoInputTimerOperator(ChainingStrategy.NEVER));
 
-		boolean testSuccess = false;
 		try {
 			env.execute("Timer test");
 		} catch (JobExecutionException e) {
-			if (e.getCause() instanceof TimerException) {
-				TimerException te = (TimerException) e.getCause();
-				if (te.getCause() instanceof RuntimeException) {
-					RuntimeException re = (RuntimeException) te.getCause();
-					if (re.getMessage().equals("TEST SUCCESS")) {
-						testSuccess = true;
-					} else {
-						throw e;
-					}
-				} else {
-					throw e;
-				}
-			} else {
-				throw e;
-			}
+			verifyJobExecutionException(e);
 		}
-		Assert.assertTrue(testSuccess);
 	}
 
-	public static class TimerOperator extends AbstractStreamOperator<String> implements OneInputStreamOperator<String, String>, ProcessingTimeCallback {
+	private static class TimerOperator extends AbstractStreamOperator<String> implements OneInputStreamOperator<String, String>, ProcessingTimeCallback {
 		private static final long serialVersionUID = 1L;
 
 		int numTimers = 0;
@@ -196,7 +165,7 @@ public class StreamTaskTimerITCase extends StreamingMultipleProgramsTestBase {
 				first = false;
 			}
 			numElements++;
-			
+
 			semaphore.release();
 		}
 
@@ -230,7 +199,7 @@ public class StreamTaskTimerITCase extends StreamingMultipleProgramsTestBase {
 		}
 	}
 
-	public static class TwoInputTimerOperator extends AbstractStreamOperator<String> implements TwoInputStreamOperator<String, String, String>, ProcessingTimeCallback {
+	private static class TwoInputTimerOperator extends AbstractStreamOperator<String> implements TwoInputStreamOperator<String, String, String>, ProcessingTimeCallback {
 		private static final long serialVersionUID = 1L;
 
 		int numTimers = 0;
@@ -274,7 +243,6 @@ public class StreamTaskTimerITCase extends StreamingMultipleProgramsTestBase {
 			semaphore.release();
 		}
 
-
 		@Override
 		public void onProcessingTime(long time) throws Exception {
 			if (!semaphore.tryAcquire()) {
@@ -307,7 +275,6 @@ public class StreamTaskTimerITCase extends StreamingMultipleProgramsTestBase {
 		}
 	}
 
-
 	private static class InfiniteTestSource implements SourceFunction<String> {
 		private static final long serialVersionUID = 1L;
 		private volatile boolean running = true;
@@ -324,7 +291,7 @@ public class StreamTaskTimerITCase extends StreamingMultipleProgramsTestBase {
 			running = false;
 		}
 	}
-	
+
 	// ------------------------------------------------------------------------
 	//  parametrization
 	// ------------------------------------------------------------------------

@@ -29,7 +29,7 @@ public interface KeyedStateStore {
 	/**
 	 * Gets a handle to the system's key/value state. The key/value state is only accessible
 	 * if the function is executed on a KeyedStream. On each access, the state exposes the value
-	 * for the the key of the element currently processed by the function.
+	 * for the key of the element currently processed by the function.
 	 * Each function may have multiple partitioned states, addressed with different names.
 	 *
 	 * <p>Because the scope of each value is the key of the currently processed element,
@@ -167,14 +167,15 @@ public interface KeyedStateStore {
 	 * <pre>{@code
 	 * DataStream<MyType> stream = ...;
 	 * KeyedStream<MyType> keyedStream = stream.keyBy("id");
+	 * AggregateFunction<...> aggregateFunction = ...
 	 *
 	 * keyedStream.map(new RichMapFunction<MyType, List<MyType>>() {
 	 *
-	 *     private FoldingState<MyType, Long> state;
+	 *     private AggregatingState<MyType, Long> state;
 	 *
 	 *     public void open(Configuration cfg) {
-	 *         state = getRuntimeContext().getReducingState(
-	 *                 new FoldingStateDescriptor<>("sum", 0L, (a, b) -> a.count() + b, Long.class));
+	 *         state = getRuntimeContext().getAggregatingState(
+	 *                 new AggregatingStateDescriptor<>("sum", aggregateFunction, Long.class));
 	 *     }
 	 *
 	 *     public Tuple2<MyType, Long> map(MyType value) {
@@ -187,18 +188,17 @@ public interface KeyedStateStore {
 	 *
 	 * @param stateProperties The descriptor defining the properties of the stats.
 	 *
-	 * @param <T> The type of value stored in the state.
+	 * @param <IN> The type of the values that are added to the state.
+	 * @param <ACC> The type of the accumulator (intermediate aggregation state).
+	 * @param <OUT> The type of the values that are returned from the state.
 	 *
 	 * @return The partitioned state object.
 	 *
 	 * @throws UnsupportedOperationException Thrown, if no partitioned state is available for the
 	 *                                       function (function is not part of a KeyedStream).
-	 *
-	 * @deprecated will be removed in a future version
 	 */
 	@PublicEvolving
-	@Deprecated
-	<T, ACC> FoldingState<T, ACC> getFoldingState(FoldingStateDescriptor<T, ACC> stateProperties);
+	<IN, ACC, OUT> AggregatingState<IN, OUT> getAggregatingState(AggregatingStateDescriptor<IN, ACC, OUT> stateProperties);
 
 	/**
 	 * Gets a handle to the system's key/value map state. This state is similar to the state
@@ -238,5 +238,5 @@ public interface KeyedStateStore {
 	 *                                       function (function is not part of a KeyedStream).
 	 */
 	@PublicEvolving
-	<UK, UV> MapState<UK,UV> getMapState(MapStateDescriptor<UK, UV> stateProperties);
+	<UK, UV> MapState<UK, UV> getMapState(MapStateDescriptor<UK, UV> stateProperties);
 }

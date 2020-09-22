@@ -18,28 +18,70 @@
 
 package org.apache.flink.streaming.connectors.kafka.internals;
 
-import org.apache.flink.streaming.api.functions.AssignerWithPeriodicWatermarks;
-import org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.core.testutils.CheckedThread;
+import org.apache.flink.core.testutils.OneShotLatch;
+import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.streaming.api.functions.source.SourceFunction.SourceContext;
-import org.apache.flink.streaming.api.watermark.Watermark;
-import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.streaming.runtime.tasks.TestProcessingTimeService;
+import org.apache.flink.streaming.connectors.kafka.testutils.TestSourceContext;
 import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
+import org.apache.flink.streaming.runtime.tasks.TestProcessingTimeService;
 import org.apache.flink.util.SerializedValue;
 
 import org.junit.Test;
 
-import javax.annotation.Nullable;
+import javax.annotation.Nonnull;
+
+import java.util.ArrayDeque;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Queue;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Mockito.mock;
 
+/**
+ * Tests for the {@link AbstractFetcher}.
+ */
 @SuppressWarnings("serial")
 public class AbstractFetcherTest {
+
+	@Test
+	public void testIgnorePartitionStateSentinelInSnapshot() throws Exception {
+		final String testTopic = "test topic name";
+		Map<KafkaTopicPartition, Long> originalPartitions = new HashMap<>();
+		originalPartitions.put(new KafkaTopicPartition(testTopic, 1), KafkaTopicPartitionStateSentinel.LATEST_OFFSET);
+		originalPartitions.put(new KafkaTopicPartition(testTopic, 2), KafkaTopicPartitionStateSentinel.GROUP_OFFSET);
+		originalPartitions.put(new KafkaTopicPartition(testTopic, 3), KafkaTopicPartitionStateSentinel.EARLIEST_OFFSET);
+
+		TestSourceContext<Long> sourceContext = new TestSourceContext<>();
+
+		TestFetcher<Long> fetcher = new TestFetcher<>(
+				sourceContext,
+				originalPartitions,
+				null, /* watermark strategy */
+				new TestProcessingTimeService(),
+				0);
+
+		synchronized (sourceContext.getCheckpointLock()) {
+			HashMap<KafkaTopicPartition, Long> currentState = fetcher.snapshotCurrentState();
+			fetcher.commitInternalOffsetsToKafka(currentState, new KafkaCommitCallback() {
+				@Override
+				public void onSuccess() {
+				}
+
+				@Override
+				public void onException(Throwable cause) {
+					throw new RuntimeException("Callback failed", cause);
+				}
+			});
+
+			assertTrue(fetcher.getLastCommittedOffsets().isPresent());
+			assertEquals(Collections.emptyMap(), fetcher.getLastCommittedOffsets().get());
+		}
+	}
 
 	// ------------------------------------------------------------------------
 	//   Record emitting tests
@@ -54,267 +96,64 @@ public class AbstractFetcherTest {
 		TestSourceContext<Long> sourceContext = new TestSourceContext<>();
 
 		TestFetcher<Long> fetcher = new TestFetcher<>(
-			sourceContext,
-			originalPartitions,
-			null, /* periodic watermark assigner */
-			null, /* punctuated watermark assigner */
-			mock(TestProcessingTimeService.class),
-			0);
+				sourceContext,
+				originalPartitions,
+				null, /* watermark strategy */
+				new TestProcessingTimeService(),
+				0);
 
-		final KafkaTopicPartitionState<Object> partitionStateHolder = fetcher.subscribedPartitionStates()[0];
+		final KafkaTopicPartitionState<Long, Object> partitionStateHolder = fetcher.subscribedPartitionStates().get(0);
 
-		fetcher.emitRecord(1L, partitionStateHolder, 1L);
-		fetcher.emitRecord(2L, partitionStateHolder, 2L);
+		emitRecord(fetcher, 1L, partitionStateHolder, 1L);
+		emitRecord(fetcher, 2L, partitionStateHolder, 2L);
 		assertEquals(2L, sourceContext.getLatestElement().getValue().longValue());
 		assertEquals(2L, partitionStateHolder.getOffset());
 
-		// emit null record
-		fetcher.emitRecord(null, partitionStateHolder, 3L);
+		// emit no records
+		fetcher.emitRecordsWithTimestamps(emptyQueue(), partitionStateHolder, 3L, Long.MIN_VALUE);
 		assertEquals(2L, sourceContext.getLatestElement().getValue().longValue()); // the null record should be skipped
 		assertEquals(3L, partitionStateHolder.getOffset()); // the offset in state still should have advanced
 	}
 
 	@Test
-	public void testSkipCorruptedRecordWithPunctuatedWatermarks() throws Exception {
-		final String testTopic = "test topic name";
-		Map<KafkaTopicPartition, Long> originalPartitions = new HashMap<>();
-		originalPartitions.put(new KafkaTopicPartition(testTopic, 1), KafkaTopicPartitionStateSentinel.LATEST_OFFSET);
+	public void testConcurrentPartitionsDiscoveryAndLoopFetching() throws Exception {
+		// test data
+		final KafkaTopicPartition testPartition = new KafkaTopicPartition("test", 42);
 
-		TestSourceContext<Long> sourceContext = new TestSourceContext<>();
+		// ----- create the test fetcher -----
 
-		TestProcessingTimeService processingTimeProvider = new TestProcessingTimeService();
+		SourceContext<String> sourceContext = new TestSourceContext<>();
+		Map<KafkaTopicPartition, Long> partitionsWithInitialOffsets =
+			Collections.singletonMap(testPartition, KafkaTopicPartitionStateSentinel.GROUP_OFFSET);
 
-		TestFetcher<Long> fetcher = new TestFetcher<>(
+		final OneShotLatch fetchLoopWaitLatch = new OneShotLatch();
+		final OneShotLatch stateIterationBlockLatch = new OneShotLatch();
+
+		final TestFetcher<String> fetcher = new TestFetcher<>(
 			sourceContext,
-			originalPartitions,
-			null, /* periodic watermark assigner */
-			new SerializedValue<AssignerWithPunctuatedWatermarks<Long>>(new PunctuatedTestExtractor()), /* punctuated watermark assigner */
-			processingTimeProvider,
-			0);
+			partitionsWithInitialOffsets,
+			null, /* watermark strategy */
+			new TestProcessingTimeService(),
+			10,
+			fetchLoopWaitLatch,
+			stateIterationBlockLatch);
 
-		final KafkaTopicPartitionState<Object> partitionStateHolder = fetcher.subscribedPartitionStates()[0];
+		// ----- run the fetcher -----
 
-		// elements generate a watermark if the timestamp is a multiple of three
-		fetcher.emitRecord(1L, partitionStateHolder, 1L);
-		fetcher.emitRecord(2L, partitionStateHolder, 2L);
-		fetcher.emitRecord(3L, partitionStateHolder, 3L);
-		assertEquals(3L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(3L, sourceContext.getLatestElement().getTimestamp());
-		assertTrue(sourceContext.hasWatermark());
-		assertEquals(3L, sourceContext.getLatestWatermark().getTimestamp());
-		assertEquals(3L, partitionStateHolder.getOffset());
+		final CheckedThread checkedThread = new CheckedThread() {
+			@Override
+			public void go() throws Exception {
+				fetcher.runFetchLoop();
+			}
+		};
+		checkedThread.start();
 
-		// emit null record
-		fetcher.emitRecord(null, partitionStateHolder, 4L);
+		// wait until state iteration begins before adding discovered partitions
+		fetchLoopWaitLatch.await();
+		fetcher.addDiscoveredPartitions(Collections.singletonList(testPartition));
 
-		// no elements or watermarks should have been collected
-		assertEquals(3L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(3L, sourceContext.getLatestElement().getTimestamp());
-		assertFalse(sourceContext.hasWatermark());
-		// the offset in state still should have advanced
-		assertEquals(4L, partitionStateHolder.getOffset());
-	}
-
-	@Test
-	public void testSkipCorruptedRecordWithPeriodicWatermarks() throws Exception {
-		final String testTopic = "test topic name";
-		Map<KafkaTopicPartition, Long> originalPartitions = new HashMap<>();
-		originalPartitions.put(new KafkaTopicPartition(testTopic, 1), KafkaTopicPartitionStateSentinel.LATEST_OFFSET);
-
-		TestSourceContext<Long> sourceContext = new TestSourceContext<>();
-
-		TestProcessingTimeService processingTimeProvider = new TestProcessingTimeService();
-
-		TestFetcher<Long> fetcher = new TestFetcher<>(
-			sourceContext,
-			originalPartitions,
-			new SerializedValue<AssignerWithPeriodicWatermarks<Long>>(new PeriodicTestExtractor()), /* periodic watermark assigner */
-			null, /* punctuated watermark assigner */
-			processingTimeProvider,
-			10);
-
-		final KafkaTopicPartitionState<Object> partitionStateHolder = fetcher.subscribedPartitionStates()[0];
-
-		// elements generate a watermark if the timestamp is a multiple of three
-		fetcher.emitRecord(1L, partitionStateHolder, 1L);
-		fetcher.emitRecord(2L, partitionStateHolder, 2L);
-		fetcher.emitRecord(3L, partitionStateHolder, 3L);
-		assertEquals(3L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(3L, sourceContext.getLatestElement().getTimestamp());
-		assertEquals(3L, partitionStateHolder.getOffset());
-
-		// advance timer for watermark emitting
-		processingTimeProvider.setCurrentTime(10L);
-		assertTrue(sourceContext.hasWatermark());
-		assertEquals(3L, sourceContext.getLatestWatermark().getTimestamp());
-
-		// emit null record
-		fetcher.emitRecord(null, partitionStateHolder, 4L);
-
-		// no elements should have been collected
-		assertEquals(3L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(3L, sourceContext.getLatestElement().getTimestamp());
-		// the offset in state still should have advanced
-		assertEquals(4L, partitionStateHolder.getOffset());
-
-		// no watermarks should be collected
-		processingTimeProvider.setCurrentTime(20L);
-		assertFalse(sourceContext.hasWatermark());
-	}
-
-	// ------------------------------------------------------------------------
-	//   Timestamps & watermarks tests
-	// ------------------------------------------------------------------------
-
-	@Test
-	public void testPunctuatedWatermarks() throws Exception {
-		final String testTopic = "test topic name";
-		Map<KafkaTopicPartition, Long> originalPartitions = new HashMap<>();
-		originalPartitions.put(new KafkaTopicPartition(testTopic, 7), KafkaTopicPartitionStateSentinel.LATEST_OFFSET);
-		originalPartitions.put(new KafkaTopicPartition(testTopic, 13), KafkaTopicPartitionStateSentinel.LATEST_OFFSET);
-		originalPartitions.put(new KafkaTopicPartition(testTopic, 21), KafkaTopicPartitionStateSentinel.LATEST_OFFSET);
-
-		TestSourceContext<Long> sourceContext = new TestSourceContext<>();
-
-		TestProcessingTimeService processingTimeProvider = new TestProcessingTimeService();
-
-		TestFetcher<Long> fetcher = new TestFetcher<>(
-				sourceContext,
-				originalPartitions,
-				null, /* periodic watermark assigner */
-				new SerializedValue<AssignerWithPunctuatedWatermarks<Long>>(new PunctuatedTestExtractor()),
-				processingTimeProvider,
-				0);
-
-		final KafkaTopicPartitionState<Object> part1 = fetcher.subscribedPartitionStates()[0];
-		final KafkaTopicPartitionState<Object> part2 = fetcher.subscribedPartitionStates()[1];
-		final KafkaTopicPartitionState<Object> part3 = fetcher.subscribedPartitionStates()[2];
-
-		// elements generate a watermark if the timestamp is a multiple of three
-		
-		// elements for partition 1
-		fetcher.emitRecord(1L, part1, 1L);
-		fetcher.emitRecord(2L, part1, 2L);
-		fetcher.emitRecord(3L, part1, 3L);
-		assertEquals(3L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(3L, sourceContext.getLatestElement().getTimestamp());
-		assertFalse(sourceContext.hasWatermark());
-
-		// elements for partition 2
-		fetcher.emitRecord(12L, part2, 1L);
-		assertEquals(12L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(12L, sourceContext.getLatestElement().getTimestamp());
-		assertFalse(sourceContext.hasWatermark());
-
-		// elements for partition 3
-		fetcher.emitRecord(101L, part3, 1L);
-		fetcher.emitRecord(102L, part3, 2L);
-		assertEquals(102L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(102L, sourceContext.getLatestElement().getTimestamp());
-		
-		// now, we should have a watermark
-		assertTrue(sourceContext.hasWatermark());
-		assertEquals(3L, sourceContext.getLatestWatermark().getTimestamp());
-		
-		// advance partition 3
-		fetcher.emitRecord(1003L, part3, 3L);
-		fetcher.emitRecord(1004L, part3, 4L);
-		fetcher.emitRecord(1005L, part3, 5L);
-		assertEquals(1005L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(1005L, sourceContext.getLatestElement().getTimestamp());
-
-		// advance partition 1 beyond partition 2 - this bumps the watermark
-		fetcher.emitRecord(30L, part1, 4L);
-		assertEquals(30L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(30L, sourceContext.getLatestElement().getTimestamp());
-		assertTrue(sourceContext.hasWatermark());
-		assertEquals(12L, sourceContext.getLatestWatermark().getTimestamp());
-
-		// advance partition 2 again - this bumps the watermark
-		fetcher.emitRecord(13L, part2, 2L);
-		assertFalse(sourceContext.hasWatermark());
-		fetcher.emitRecord(14L, part2, 3L);
-		assertFalse(sourceContext.hasWatermark());
-		fetcher.emitRecord(15L, part2, 3L);
-		assertTrue(sourceContext.hasWatermark());
-		assertEquals(15L, sourceContext.getLatestWatermark().getTimestamp());
-	}
-	
-	@Test
-	public void testPeriodicWatermarks() throws Exception {
-		final String testTopic = "test topic name";
-		Map<KafkaTopicPartition, Long> originalPartitions = new HashMap<>();
-		originalPartitions.put(new KafkaTopicPartition(testTopic, 7), KafkaTopicPartitionStateSentinel.LATEST_OFFSET);
-		originalPartitions.put(new KafkaTopicPartition(testTopic, 13), KafkaTopicPartitionStateSentinel.LATEST_OFFSET);
-		originalPartitions.put(new KafkaTopicPartition(testTopic, 21), KafkaTopicPartitionStateSentinel.LATEST_OFFSET);
-
-		TestSourceContext<Long> sourceContext = new TestSourceContext<>();
-
-		TestProcessingTimeService processingTimeService = new TestProcessingTimeService();
-
-		TestFetcher<Long> fetcher = new TestFetcher<>(
-				sourceContext,
-				originalPartitions,
-				new SerializedValue<AssignerWithPeriodicWatermarks<Long>>(new PeriodicTestExtractor()),
-				null, /* punctuated watermarks assigner*/
-				processingTimeService,
-				10);
-
-		final KafkaTopicPartitionState<Object> part1 = fetcher.subscribedPartitionStates()[0];
-		final KafkaTopicPartitionState<Object> part2 = fetcher.subscribedPartitionStates()[1];
-		final KafkaTopicPartitionState<Object> part3 = fetcher.subscribedPartitionStates()[2];
-
-		// elements generate a watermark if the timestamp is a multiple of three
-
-		// elements for partition 1
-		fetcher.emitRecord(1L, part1, 1L);
-		fetcher.emitRecord(2L, part1, 2L);
-		fetcher.emitRecord(3L, part1, 3L);
-		assertEquals(3L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(3L, sourceContext.getLatestElement().getTimestamp());
-
-		// elements for partition 2
-		fetcher.emitRecord(12L, part2, 1L);
-		assertEquals(12L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(12L, sourceContext.getLatestElement().getTimestamp());
-
-		// elements for partition 3
-		fetcher.emitRecord(101L, part3, 1L);
-		fetcher.emitRecord(102L, part3, 2L);
-		assertEquals(102L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(102L, sourceContext.getLatestElement().getTimestamp());
-
-		processingTimeService.setCurrentTime(10);
-
-		// now, we should have a watermark (this blocks until the periodic thread emitted the watermark)
-		assertEquals(3L, sourceContext.getLatestWatermark().getTimestamp());
-
-		// advance partition 3
-		fetcher.emitRecord(1003L, part3, 3L);
-		fetcher.emitRecord(1004L, part3, 4L);
-		fetcher.emitRecord(1005L, part3, 5L);
-		assertEquals(1005L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(1005L, sourceContext.getLatestElement().getTimestamp());
-
-		// advance partition 1 beyond partition 2 - this bumps the watermark
-		fetcher.emitRecord(30L, part1, 4L);
-		assertEquals(30L, sourceContext.getLatestElement().getValue().longValue());
-		assertEquals(30L, sourceContext.getLatestElement().getTimestamp());
-
-		processingTimeService.setCurrentTime(20);
-
-		// this blocks until the periodic thread emitted the watermark
-		assertEquals(12L, sourceContext.getLatestWatermark().getTimestamp());
-
-		// advance partition 2 again - this bumps the watermark
-		fetcher.emitRecord(13L, part2, 2L);
-		fetcher.emitRecord(14L, part2, 3L);
-		fetcher.emitRecord(15L, part2, 3L);
-
-		processingTimeService.setCurrentTime(30);
-		// this blocks until the periodic thread emitted the watermark
-		long watermarkTs = sourceContext.getLatestWatermark().getTimestamp();
-		assertTrue(watermarkTs >= 13L && watermarkTs <= 15L);
+		stateIterationBlockLatch.trigger();
+		checkedThread.sync();
 	}
 
 	// ------------------------------------------------------------------------
@@ -322,29 +161,65 @@ public class AbstractFetcherTest {
 	// ------------------------------------------------------------------------
 
 	private static final class TestFetcher<T> extends AbstractFetcher<T, Object> {
+		Map<KafkaTopicPartition, Long> lastCommittedOffsets = null;
 
-		protected TestFetcher(
+		private final OneShotLatch fetchLoopWaitLatch;
+		private final OneShotLatch stateIterationBlockLatch;
+
+		TestFetcher(
 				SourceContext<T> sourceContext,
 				Map<KafkaTopicPartition, Long> assignedPartitionsWithStartOffsets,
-				SerializedValue<AssignerWithPeriodicWatermarks<T>> watermarksPeriodic,
-				SerializedValue<AssignerWithPunctuatedWatermarks<T>> watermarksPunctuated,
+				SerializedValue<WatermarkStrategy<T>> watermarkStrategy,
 				ProcessingTimeService processingTimeProvider,
-				long autoWatermarkInterval) throws Exception
-		{
+				long autoWatermarkInterval) throws Exception {
+
+			this(
+				sourceContext,
+				assignedPartitionsWithStartOffsets,
+				watermarkStrategy,
+				processingTimeProvider,
+				autoWatermarkInterval,
+				null,
+				null);
+		}
+
+		TestFetcher(
+				SourceContext<T> sourceContext,
+				Map<KafkaTopicPartition, Long> assignedPartitionsWithStartOffsets,
+				SerializedValue<WatermarkStrategy<T>> watermarkStrategy,
+				ProcessingTimeService processingTimeProvider,
+				long autoWatermarkInterval,
+				OneShotLatch fetchLoopWaitLatch,
+				OneShotLatch stateIterationBlockLatch) throws Exception {
+
 			super(
 				sourceContext,
 				assignedPartitionsWithStartOffsets,
-				watermarksPeriodic,
-				watermarksPunctuated,
+				watermarkStrategy,
 				processingTimeProvider,
 				autoWatermarkInterval,
 				TestFetcher.class.getClassLoader(),
+				new UnregisteredMetricsGroup(),
 				false);
+
+			this.fetchLoopWaitLatch = fetchLoopWaitLatch;
+			this.stateIterationBlockLatch = stateIterationBlockLatch;
 		}
 
+		/**
+		 * Emulation of partition's iteration which is required for
+		 * {@link AbstractFetcherTest#testConcurrentPartitionsDiscoveryAndLoopFetching}.
+		 */
 		@Override
 		public void runFetchLoop() throws Exception {
-			throw new UnsupportedOperationException();
+			if (fetchLoopWaitLatch != null) {
+				for (KafkaTopicPartitionState<?, ?> ignored : subscribedPartitionStates()) {
+					fetchLoopWaitLatch.trigger();
+					stateIterationBlockLatch.await();
+				}
+			} else {
+				throw new UnsupportedOperationException();
+			}
 		}
 
 		@Override
@@ -358,104 +233,36 @@ public class AbstractFetcherTest {
 		}
 
 		@Override
-		public void commitInternalOffsetsToKafka(Map<KafkaTopicPartition, Long> offsets) throws Exception {
-			throw new UnsupportedOperationException();
+		protected void doCommitInternalOffsetsToKafka(
+				Map<KafkaTopicPartition, Long> offsets,
+				@Nonnull KafkaCommitCallback callback) {
+			lastCommittedOffsets = offsets;
+			callback.onSuccess();
+		}
+
+		public Optional<Map<KafkaTopicPartition, Long>> getLastCommittedOffsets() {
+			return Optional.ofNullable(lastCommittedOffsets);
 		}
 	}
 
 	// ------------------------------------------------------------------------
 
-	private static final class TestSourceContext<T> implements SourceContext<T> {
+	private static <T, KPH> void emitRecord(
+			AbstractFetcher<T, KPH> fetcher,
+			T record,
+			KafkaTopicPartitionState<T, KPH> partitionState,
+			long offset) {
+		ArrayDeque<T> recordQueue = new ArrayDeque<>();
+		recordQueue.add(record);
 
-		private final Object checkpointLock = new Object();
-		private final Object watermarkLock = new Object();
-
-		private volatile StreamRecord<T> latestElement;
-		private volatile Watermark currentWatermark;
-
-		@Override
-		public void collect(T element) {
-			this.latestElement = new StreamRecord<>(element);
-		}
-
-		@Override
-		public void collectWithTimestamp(T element, long timestamp) {
-			this.latestElement = new StreamRecord<>(element, timestamp);
-		}
-
-		@Override
-		public void emitWatermark(Watermark mark) {
-			synchronized (watermarkLock) {
-				currentWatermark = mark;
-				watermarkLock.notifyAll();
-			}
-		}
-
-
-		@Override
-		public void markAsTemporarilyIdle() {
-			throw new UnsupportedOperationException();
-		}
-
-		@Override
-		public Object getCheckpointLock() {
-			return checkpointLock;
-		}
-
-		@Override
-		public void close() {}
-
-		public StreamRecord<T> getLatestElement() {
-			return latestElement;
-		}
-
-		public boolean hasWatermark() {
-			return currentWatermark != null;
-		}
-		
-		public Watermark getLatestWatermark() throws InterruptedException {
-			synchronized (watermarkLock) {
-				while (currentWatermark == null) {
-					watermarkLock.wait();
-				}
-				Watermark wm = currentWatermark;
-				currentWatermark = null;
-				return wm;
-			}
-		}
+		fetcher.emitRecordsWithTimestamps(
+			recordQueue,
+			partitionState,
+			offset,
+			Long.MIN_VALUE);
 	}
 
-	// ------------------------------------------------------------------------
-
-	private static class PeriodicTestExtractor implements AssignerWithPeriodicWatermarks<Long> {
-
-		private volatile long maxTimestamp = Long.MIN_VALUE;
-		
-		@Override
-		public long extractTimestamp(Long element, long previousElementTimestamp) {
-			maxTimestamp = Math.max(maxTimestamp, element);
-			return element;
-		}
-
-		@Nullable
-		@Override
-		public Watermark getCurrentWatermark() {
-			return new Watermark(maxTimestamp);
-		}
-	}
-
-	private static class PunctuatedTestExtractor implements AssignerWithPunctuatedWatermarks<Long> {
-
-		@Override
-		public long extractTimestamp(Long element, long previousElementTimestamp) {
-			return element;
-		}
-
-		@Nullable
-		@Override
-		public Watermark checkAndGetNextWatermark(Long lastElement, long extractedTimestamp) {
-			return extractedTimestamp % 3 == 0 ? new Watermark(extractedTimestamp) : null;
-		}
-		
+	private static <T> Queue<T> emptyQueue() {
+		return new ArrayDeque<>();
 	}
 }

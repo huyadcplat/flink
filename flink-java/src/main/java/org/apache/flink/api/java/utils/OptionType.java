@@ -16,17 +16,17 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.api.java.utils;
-
-import org.apache.flink.annotation.PublicEvolving;
 
 /**
  * Types the parameters of managed with {@link RequiredParameters} can take.
  *
- * Name maps directly to the corresponding Java type.
+ * <p>Name maps directly to the corresponding Java type.
+ *
+ * @deprecated These classes will be dropped in the next version. Use {@link ParameterTool} or a third-party
+ *             command line parsing library instead.
  */
-@PublicEvolving
+@Deprecated
 public enum OptionType {
 	INTEGER,
 	LONG,

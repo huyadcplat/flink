@@ -18,8 +18,10 @@
 
 package org.apache.flink.streaming.connectors.elasticsearch;
 
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.functions.Function;
 import org.apache.flink.api.common.functions.RuntimeContext;
+
 import org.elasticsearch.action.ActionRequest;
 
 import java.io.Serializable;
@@ -27,11 +29,9 @@ import java.io.Serializable;
 /**
  * Creates multiple {@link ActionRequest ActionRequests} from an element in a stream.
  *
- * <p>
- * This is used by sinks to prepare elements for sending them to Elasticsearch.
+ * <p>This is used by sinks to prepare elements for sending them to Elasticsearch.
  *
- * <p>
- * Example:
+ * <p>Example:
  *
  * <pre>{@code
  *					private static class TestElasticSearchSinkFunction implements
@@ -57,7 +57,18 @@ import java.io.Serializable;
  *
  * @param <T> The type of the element handled by this {@code ElasticsearchSinkFunction}
  */
+@PublicEvolving
 public interface ElasticsearchSinkFunction<T> extends Serializable, Function {
+
+	/**
+	 * Initialization method for the function. It is called once before the actual working process methods.
+	 */
+	default void open() throws Exception {}
+
+	/**
+	 * Tear-down method for the function. It is called when the sink closes.
+	 */
+	default void close () throws Exception {}
 
 	/**
 	 * Process the incoming element to produce multiple {@link ActionRequest ActionsRequests}.

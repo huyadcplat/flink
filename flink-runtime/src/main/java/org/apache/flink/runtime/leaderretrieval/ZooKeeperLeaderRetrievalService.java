@@ -18,15 +18,21 @@
 
 package org.apache.flink.runtime.leaderretrieval;
 
+import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.Preconditions;
-import org.apache.curator.framework.CuratorFramework;
-import org.apache.curator.framework.recipes.cache.ChildData;
-import org.apache.curator.framework.recipes.cache.NodeCache;
-import org.apache.curator.framework.recipes.cache.NodeCacheListener;
-import org.apache.curator.framework.state.ConnectionState;
-import org.apache.curator.framework.state.ConnectionStateListener;
+
+import org.apache.flink.shaded.curator4.org.apache.curator.framework.CuratorFramework;
+import org.apache.flink.shaded.curator4.org.apache.curator.framework.api.UnhandledErrorListener;
+import org.apache.flink.shaded.curator4.org.apache.curator.framework.recipes.cache.ChildData;
+import org.apache.flink.shaded.curator4.org.apache.curator.framework.recipes.cache.NodeCache;
+import org.apache.flink.shaded.curator4.org.apache.curator.framework.recipes.cache.NodeCacheListener;
+import org.apache.flink.shaded.curator4.org.apache.curator.framework.state.ConnectionState;
+import org.apache.flink.shaded.curator4.org.apache.curator.framework.state.ConnectionStateListener;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.concurrent.GuardedBy;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -40,19 +46,21 @@ import java.util.UUID;
  * been elected by the {@link org.apache.flink.runtime.leaderelection.ZooKeeperLeaderElectionService}.
  * The leader address as well as the current leader session ID is retrieved from ZooKeeper.
  */
-public class ZooKeeperLeaderRetrievalService implements LeaderRetrievalService, NodeCacheListener {
+public class ZooKeeperLeaderRetrievalService implements LeaderRetrievalService, NodeCacheListener, UnhandledErrorListener {
 	private static final Logger LOG = LoggerFactory.getLogger(
 		ZooKeeperLeaderRetrievalService.class);
 
 	private final Object lock = new Object();
 
-	/** Connection to the used ZooKeeper quorum */
+	/** Connection to the used ZooKeeper quorum. */
 	private final CuratorFramework client;
 
-	/** Curator recipe to watch changes of a specific ZooKeeper node */
+	/** Curator recipe to watch changes of a specific ZooKeeper node. */
 	private final NodeCache cache;
 
-	/** Listener which will be notified about leader changes */
+	private final String retrievalPath;
+
+	/** Listener which will be notified about leader changes. */
 	private volatile LeaderRetrievalListener leaderListener;
 
 	private String lastLeaderAddress;
@@ -77,6 +85,7 @@ public class ZooKeeperLeaderRetrievalService implements LeaderRetrievalService, 
 	public ZooKeeperLeaderRetrievalService(CuratorFramework client, String retrievalPath) {
 		this.client = Preconditions.checkNotNull(client, "CuratorFramework client");
 		this.cache = new NodeCache(client, retrievalPath);
+		this.retrievalPath = Preconditions.checkNotNull(retrievalPath);
 
 		this.leaderListener = null;
 		this.lastLeaderAddress = null;
@@ -91,11 +100,12 @@ public class ZooKeeperLeaderRetrievalService implements LeaderRetrievalService, 
 		Preconditions.checkState(leaderListener == null, "ZooKeeperLeaderRetrievalService can " +
 				"only be started once.");
 
-		LOG.info("Starting ZooKeeperLeaderRetrievalService.");
+		LOG.info("Starting ZooKeeperLeaderRetrievalService {}.", retrievalPath);
 
 		synchronized (lock) {
 			leaderListener = listener;
 
+			client.getUnhandledErrorListenable().addListener(this);
 			cache.getListenable().addListener(this);
 			cache.start();
 
@@ -107,7 +117,7 @@ public class ZooKeeperLeaderRetrievalService implements LeaderRetrievalService, 
 
 	@Override
 	public void stop() throws Exception {
-		LOG.info("Stopping ZooKeeperLeaderRetrievalService.");
+		LOG.info("Stopping ZooKeeperLeaderRetrievalService {}.", retrievalPath);
 
 		synchronized (lock) {
 			if (!running) {
@@ -117,6 +127,7 @@ public class ZooKeeperLeaderRetrievalService implements LeaderRetrievalService, 
 			running = false;
 		}
 
+		client.getUnhandledErrorListenable().removeListener(this);
 		client.getConnectionStateListenable().removeListener(connectionStateListener);
 
 		try {
@@ -156,17 +167,7 @@ public class ZooKeeperLeaderRetrievalService implements LeaderRetrievalService, 
 						}
 					}
 
-					if (!(Objects.equals(leaderAddress, lastLeaderAddress) &&
-						Objects.equals(leaderSessionID, lastLeaderSessionID))) {
-						LOG.debug(
-							"New leader information: Leader={}, session ID={}.",
-							leaderAddress,
-							leaderSessionID);
-
-						lastLeaderAddress = leaderAddress;
-						lastLeaderSessionID = leaderSessionID;
-						leaderListener.notifyLeaderAddress(leaderAddress, leaderSessionID);
-					}
+					notifyIfNewLeaderAddress(leaderAddress, leaderSessionID);
 				} catch (Exception e) {
 					leaderListener.handleError(new Exception("Could not handle node changed event.", e));
 					throw e;
@@ -184,15 +185,50 @@ public class ZooKeeperLeaderRetrievalService implements LeaderRetrievalService, 
 				break;
 			case SUSPENDED:
 				LOG.warn("Connection to ZooKeeper suspended. Can no longer retrieve the leader from " +
-					"ZooKeeper.");
+						"ZooKeeper.");
+				synchronized (lock) {
+					notifyLeaderLoss();
+				}
 				break;
 			case RECONNECTED:
 				LOG.info("Connection to ZooKeeper was reconnected. Leader retrieval can be restarted.");
 				break;
 			case LOST:
 				LOG.warn("Connection to ZooKeeper lost. Can no longer retrieve the leader from " +
-					"ZooKeeper.");
+						"ZooKeeper.");
+				synchronized (lock) {
+					notifyLeaderLoss();
+				}
 				break;
 		}
+	}
+
+	@Override
+	public void unhandledError(String s, Throwable throwable) {
+		leaderListener.handleError(new FlinkException("Unhandled error in ZooKeeperLeaderRetrievalService:" + s, throwable));
+	}
+
+	@GuardedBy("lock")
+	private void notifyIfNewLeaderAddress(String newLeaderAddress, UUID newLeaderSessionID) {
+		if (!(Objects.equals(newLeaderAddress, lastLeaderAddress) &&
+				Objects.equals(newLeaderSessionID, lastLeaderSessionID))) {
+			if (newLeaderAddress == null && newLeaderSessionID == null) {
+				LOG.debug("Leader information was lost: The listener will be notified accordingly.");
+			} else {
+				LOG.debug(
+						"New leader information: Leader={}, session ID={}.",
+						newLeaderAddress,
+						newLeaderSessionID);
+			}
+
+			lastLeaderAddress = newLeaderAddress;
+			lastLeaderSessionID = newLeaderSessionID;
+			leaderListener.notifyLeaderAddress(newLeaderAddress, newLeaderSessionID);
+		}
+	}
+
+	@GuardedBy("lock")
+	private void notifyLeaderLoss() {
+		notifyIfNewLeaderAddress(null, null);
 	}
 }

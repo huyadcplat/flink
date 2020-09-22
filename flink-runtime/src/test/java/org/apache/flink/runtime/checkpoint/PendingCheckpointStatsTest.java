@@ -42,7 +42,7 @@ public class PendingCheckpointStatsTest {
 	public void testReportSubtaskStats() throws Exception {
 		long checkpointId = Integer.MAX_VALUE + 1222L;
 		long triggerTimestamp = Integer.MAX_VALUE - 1239L;
-		CheckpointProperties props = CheckpointProperties.forStandardCheckpoint();
+		CheckpointProperties props = CheckpointProperties.forCheckpoint(CheckpointRetentionPolicy.NEVER_RETAIN_AFTER_TERMINATION);
 		TaskStateStats task1 = new TaskStateStats(new JobVertexID(), 3);
 		TaskStateStats task2 = new TaskStateStats(new JobVertexID(), 4);
 		int totalSubtaskCount = task1.getNumberOfSubtasks() + task2.getNumberOfSubtasks();
@@ -81,13 +81,11 @@ public class PendingCheckpointStatsTest {
 		assertFalse(pending.reportSubtaskStats(new JobVertexID(), createSubtaskStats(0)));
 
 		long stateSize = 0;
-		long alignmentBuffered = 0;
 
 		// Report 1st task
 		for (int i = 0; i < task1.getNumberOfSubtasks(); i++) {
 			SubtaskStateStats subtask = createSubtaskStats(i);
 			stateSize += subtask.getStateSize();
-			alignmentBuffered += subtask.getAlignmentBuffered();
 
 			pending.reportSubtaskStats(task1.getJobVertexId(), subtask);
 
@@ -95,7 +93,6 @@ public class PendingCheckpointStatsTest {
 			assertEquals(subtask.getAckTimestamp(), pending.getLatestAckTimestamp());
 			assertEquals(subtask.getAckTimestamp() - triggerTimestamp, pending.getEndToEndDuration());
 			assertEquals(stateSize, pending.getStateSize());
-			assertEquals(alignmentBuffered, pending.getAlignmentBuffered());
 		}
 
 		// Don't allow overwrite
@@ -105,7 +102,6 @@ public class PendingCheckpointStatsTest {
 		for (int i = 0; i < task2.getNumberOfSubtasks(); i++) {
 			SubtaskStateStats subtask = createSubtaskStats(i);
 			stateSize += subtask.getStateSize();
-			alignmentBuffered += subtask.getAlignmentBuffered();
 
 			pending.reportSubtaskStats(task2.getJobVertexId(), subtask);
 
@@ -113,7 +109,6 @@ public class PendingCheckpointStatsTest {
 			assertEquals(subtask.getAckTimestamp(), pending.getLatestAckTimestamp());
 			assertEquals(subtask.getAckTimestamp() - triggerTimestamp, pending.getEndToEndDuration());
 			assertEquals(stateSize, pending.getStateSize());
-			assertEquals(alignmentBuffered, pending.getAlignmentBuffered());
 		}
 
 		assertEquals(task1.getNumberOfSubtasks(), task1.getNumberOfAcknowledgedSubtasks());
@@ -138,7 +133,7 @@ public class PendingCheckpointStatsTest {
 		PendingCheckpointStats pending = new PendingCheckpointStats(
 			0,
 			1,
-			CheckpointProperties.forStandardCheckpoint(),
+			CheckpointProperties.forCheckpoint(CheckpointRetentionPolicy.NEVER_RETAIN_AFTER_TERMINATION),
 			task1.getNumberOfSubtasks() + task2.getNumberOfSubtasks(),
 			taskStats,
 			callback);
@@ -175,7 +170,6 @@ public class PendingCheckpointStatsTest {
 		assertEquals(pending.getLatestAckTimestamp(), completed.getLatestAckTimestamp());
 		assertEquals(pending.getEndToEndDuration(), completed.getEndToEndDuration());
 		assertEquals(pending.getStateSize(), completed.getStateSize());
-		assertEquals(pending.getAlignmentBuffered(), completed.getAlignmentBuffered());
 		assertEquals(task1, completed.getTaskStateStats(task1.getJobVertexId()));
 		assertEquals(task2, completed.getTaskStateStats(task2.getJobVertexId()));
 	}
@@ -199,7 +193,7 @@ public class PendingCheckpointStatsTest {
 		PendingCheckpointStats pending = new PendingCheckpointStats(
 			0,
 			triggerTimestamp,
-			CheckpointProperties.forStandardCheckpoint(),
+			CheckpointProperties.forCheckpoint(CheckpointRetentionPolicy.NEVER_RETAIN_AFTER_TERMINATION),
 			task1.getNumberOfSubtasks() + task2.getNumberOfSubtasks(),
 			taskStats,
 			callback);
@@ -234,7 +228,6 @@ public class PendingCheckpointStatsTest {
 		assertEquals(pending.getLatestAckTimestamp(), failed.getLatestAckTimestamp());
 		assertEquals(failureTimestamp - triggerTimestamp, failed.getEndToEndDuration());
 		assertEquals(pending.getStateSize(), failed.getStateSize());
-		assertEquals(pending.getAlignmentBuffered(), failed.getAlignmentBuffered());
 		assertEquals(task1, failed.getTaskStateStats(task1.getJobVertexId()));
 		assertEquals(task2, failed.getTaskStateStats(task2.getJobVertexId()));
 	}
@@ -251,7 +244,7 @@ public class PendingCheckpointStatsTest {
 		PendingCheckpointStats pending = new PendingCheckpointStats(
 			123123123L,
 			10123L,
-			CheckpointProperties.forStandardCheckpoint(),
+			CheckpointProperties.forCheckpoint(CheckpointRetentionPolicy.NEVER_RETAIN_AFTER_TERMINATION),
 			1337,
 			taskStats,
 			mock(CheckpointStatsTracker.PendingCheckpointStatsCallback.class));

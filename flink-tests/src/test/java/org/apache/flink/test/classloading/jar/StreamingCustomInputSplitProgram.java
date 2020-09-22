@@ -31,24 +31,25 @@ import org.apache.flink.core.io.InputSplit;
 import org.apache.flink.core.io.InputSplitAssigner;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.SinkFunction;
+import org.apache.flink.streaming.api.functions.sink.DiscardingSink;
 
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+/**
+ * Test class used by the {@link org.apache.flink.test.classloading.ClassLoaderITCase}.
+ */
 @SuppressWarnings("serial")
 public class StreamingCustomInputSplitProgram {
-	
+
 	public static void main(String[] args) throws Exception {
 				Configuration config = new Configuration();
 
 		config.setString(AkkaOptions.ASK_TIMEOUT, "5 s");
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-
-		env.getConfig().disableSysoutLogging();
 
 		DataStream<Integer> data = env.createInput(new CustomInputFormat());
 
@@ -57,13 +58,13 @@ public class StreamingCustomInputSplitProgram {
 			public Tuple2<Integer, Double> map(Integer value) throws Exception {
 				return new Tuple2<Integer, Double>(value, value * 0.5);
 			}
-		}).addSink(new NoOpSink());
+		}).addSink(new DiscardingSink<>());
 
 		env.execute();
 	}
 	// --------------------------------------------------------------------------------------------
-	
-	public static final class CustomInputFormat implements InputFormat<Integer, CustomInputSplit>, ResultTypeQueryable<Integer> {
+
+	private static final class CustomInputFormat implements InputFormat<Integer, CustomInputSplit>, ResultTypeQueryable<Integer> {
 
 		private static final long serialVersionUID = 1L;
 
@@ -119,7 +120,7 @@ public class StreamingCustomInputSplitProgram {
 		}
 	}
 
-	public static final class CustomInputSplit implements InputSplit {
+	private static final class CustomInputSplit implements InputSplit {
 
 		private static final long serialVersionUID = 1L;
 
@@ -135,7 +136,7 @@ public class StreamingCustomInputSplitProgram {
 		}
 	}
 
-	public static final class CustomSplitAssigner implements InputSplitAssigner, Serializable {
+	private static final class CustomSplitAssigner implements InputSplitAssigner, Serializable {
 
 		private final List<CustomInputSplit> remainingSplits;
 
@@ -154,11 +155,14 @@ public class StreamingCustomInputSplitProgram {
 				}
 			}
 		}
-	}
 
-	public static class NoOpSink implements SinkFunction<Tuple2<Integer, Double>> {
 		@Override
-		public void invoke(Tuple2<Integer, Double> value) throws Exception {
+		public void returnInputSplit(List<InputSplit> splits, int taskId) {
+			synchronized (this) {
+				for (InputSplit split : splits) {
+					remainingSplits.add((CustomInputSplit) split);
+				}
+			}
 		}
 	}
 }

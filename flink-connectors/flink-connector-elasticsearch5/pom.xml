@@ -26,19 +26,30 @@ under the License.
 	<parent>
 		<groupId>org.apache.flink</groupId>
 		<artifactId>flink-connectors</artifactId>
-		<version>1.4-SNAPSHOT</version>
+		<version>1.12-SNAPSHOT</version>
 		<relativePath>..</relativePath>
 	</parent>
 
 	<artifactId>flink-connector-elasticsearch5_${scala.binary.version}</artifactId>
-	<name>flink-connector-elasticsearch5</name>
+	<name>Flink : Connectors : Elasticsearch 5</name>
 
 	<packaging>jar</packaging>
 
 	<!-- Allow users to pass custom connector versions -->
 	<properties>
-		<elasticsearch.version>5.1.2</elasticsearch.version>
+		<elasticsearch.version>5.3.3</elasticsearch.version>
 	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<!-- Bump version to 1.25 to make it work with Jackson dependencies (2.10.1) -->
+			<dependency>
+				<groupId>org.yaml</groupId>
+				<artifactId>snakeyaml</artifactId>
+				<version>1.25</version>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 
 	<dependencies>
 
@@ -71,17 +82,53 @@ under the License.
 			<version>${elasticsearch.version}</version>
 		</dependency>
 
-		<!--
-			Elasticsearch 5.x uses Log4j2 and no longer detects logging implementations, making
-			Log4j2 a strict dependency. The following is added so that the Log4j2 API in
-			Elasticsearch 5.x is routed to SLF4J. This way, user projects can remain flexible
-			in the logging implementation preferred.
-		-->
+		<dependency>
+			<!-- Bump elasticsearch netty dependency -->
+			<groupId>io.netty</groupId>
+			<artifactId>netty-buffer</artifactId>
+			<version>4.1.44.Final</version>
+		</dependency>
 
 		<dependency>
-			<groupId>org.apache.logging.log4j</groupId>
-			<artifactId>log4j-to-slf4j</artifactId>
-			<version>2.7</version>
+			<!-- Bump elasticsearch netty dependency -->
+			<groupId>io.netty</groupId>
+			<artifactId>netty-codec</artifactId>
+			<version>4.1.44.Final</version>
+		</dependency>
+
+		<dependency>
+			<!-- Bump elasticsearch netty dependency -->
+			<groupId>io.netty</groupId>
+			<artifactId>netty-codec-http</artifactId>
+			<version>4.1.44.Final</version>
+		</dependency>
+
+		<dependency>
+			<!-- Bump elasticsearch netty dependency -->
+			<groupId>io.netty</groupId>
+			<artifactId>netty-common</artifactId>
+			<version>4.1.44.Final</version>
+		</dependency>
+
+		<dependency>
+			<!-- Bump elasticsearch netty dependency -->
+			<groupId>io.netty</groupId>
+			<artifactId>netty-handler</artifactId>
+			<version>4.1.44.Final</version>
+		</dependency>
+
+		<dependency>
+			<!-- Bump elasticsearch netty dependency -->
+			<groupId>io.netty</groupId>
+			<artifactId>netty-resolver</artifactId>
+			<version>4.1.44.Final</version>
+		</dependency>
+
+		<dependency>
+			<!-- Bump elasticsearch netty dependency -->
+			<groupId>io.netty</groupId>
+			<artifactId>netty-transport</artifactId>
+			<version>4.1.44.Final</version>
 		</dependency>
 
 		<!-- test dependencies -->
@@ -115,46 +162,130 @@ under the License.
 			<scope>test</scope>
 		</dependency>
 
-		<!--
-			Including Log4j2 dependencies for tests is required for the
-			embedded Elasticsearch nodes used in tests to run correctly.
-		-->
-
-		<dependency>
-			<groupId>org.apache.logging.log4j</groupId>
-			<artifactId>log4j-api</artifactId>
-			<version>2.7</version>
-			<scope>test</scope>
-		</dependency>
-
-		<dependency>
-			<groupId>org.apache.logging.log4j</groupId>
-			<artifactId>log4j-core</artifactId>
-			<version>2.7</version>
-			<scope>test</scope>
-		</dependency>
-
 	</dependencies>
 
 	<build>
 		<plugins>
-			<!--
-				For the tests, we need to exclude the Log4j2 to slf4j adapter dependency
-				and let Elasticsearch directly use Log4j2, otherwise the embedded Elasticsearch node
-				used in tests will fail to work.
-
-				In other words, the connector jar is routing Elasticsearch 5.x's Log4j2 API's to SLF4J,
-				but for the test builds, we still stick to directly using Log4j2.
-			-->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-surefire-plugin</artifactId>
-				<version>2.12.2</version>
-				<configuration>
-					<classpathDependencyExcludes>
-						<classpathDependencyExclude>org.apache.logging.log4j:log4j-to-slf4j</classpathDependencyExclude>
-					</classpathDependencyExcludes>
-				</configuration>
+				<artifactId>maven-shade-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>shade-flink</id>
+						<phase>package</phase>
+						<goals>
+							<goal>shade</goal>
+						</goals>
+						<configuration>
+							<shadeTestJar>false</shadeTestJar>
+							<artifactSet>
+								<includes>
+									<include>*:*</include>
+								</includes>
+							</artifactSet>
+							<relocations>
+								<relocation>
+									<pattern>com.carrotsearch</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.com.carrotsearch</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>com.fasterxml</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.com.fasterxml</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>com.github</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.com.github</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>com.sun</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.com.sun</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>com.tdunning</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.com.tdunning</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>io.netty</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.io.netty</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>org.apache</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.org.apache</shadedPattern>
+									<excludes>
+										<!-- keep flink classes as they are (exceptions as above) -->
+										<exclude>org.apache.flink.**</exclude>
+										<exclude>org.apache.logging.log4j.**</exclude> <!-- provided -->
+									</excludes>
+								</relocation>
+								<relocation>
+									<pattern>org.HdrHistogram</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.org.HdrHistogram</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>org.jboss</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.org.jboss</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>org.joda</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.org.joda</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>org.tartarus</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.org.tartarus</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>org.yaml</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.org.yaml</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>joptsimple</pattern>
+									<shadedPattern>org.apache.flink.streaming.connectors.elasticsearch5.shaded.joptsimple</shadedPattern>
+								</relocation>
+							</relocations>
+							<filters>
+								<filter>
+									<!-- some dependencies bring their own LICENSE.txt which we don't need -->
+									<artifact>*:*</artifact>
+									<excludes>
+										<exclude>META-INF/LICENSE.txt</exclude>
+									</excludes>
+								</filter>
+								<filter>
+									<artifact>*</artifact>
+									<excludes>
+										<exclude>log4j.properties</exclude>
+										<exclude>config/favicon.ico</exclude>
+										<exclude>mozilla/**</exclude>
+										<exclude>META-INF/maven/com*/**</exclude>
+										<exclude>META-INF/maven/io*/**</exclude>
+										<exclude>META-INF/maven/joda*/**</exclude>
+										<exclude>META-INF/maven/net*/**</exclude>
+										<exclude>META-INF/maven/org.an*/**</exclude>
+										<exclude>META-INF/maven/org.apache.h*/**</exclude>
+										<exclude>META-INF/maven/org.apache.commons/**</exclude>
+										<exclude>META-INF/maven/org.apache.flink/force-shading/**</exclude>
+										<exclude>META-INF/maven/org.apache.logging*/**</exclude>
+										<exclude>META-INF/maven/org.e*/**</exclude>
+										<exclude>META-INF/maven/org.h*/**</exclude>
+										<exclude>META-INF/maven/org.j*/**</exclude>
+										<exclude>META-INF/maven/org.y*/**</exclude>
+									</excludes>
+								</filter>
+								<filter>
+									<artifact>io.netty:netty</artifact>
+									<excludes>
+										<!-- Only some of these licenses actually apply to the JAR and have been manually
+										 	placed in this module's resources directory. -->
+										<exclude>META-INF/license/**</exclude>
+										<!-- Only parts of NOTICE file actually apply to the netty JAR and have been manually
+										 	copied into this modules's NOTICE file. -->
+										<exclude>META-INF/NOTICE.txt</exclude>
+									</excludes>
+								</filter>
+							</filters>
+						</configuration>
+					</execution>
+				</executions>
 			</plugin>
 		</plugins>
 	</build>

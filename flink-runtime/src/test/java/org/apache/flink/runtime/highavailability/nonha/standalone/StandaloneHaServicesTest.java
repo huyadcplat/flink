@@ -25,6 +25,7 @@ import org.apache.flink.runtime.leaderelection.LeaderElectionService;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalListener;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
 import org.apache.flink.util.TestLogger;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -38,15 +39,19 @@ import static org.mockito.Mockito.verify;
  */
 public class StandaloneHaServicesTest extends TestLogger {
 
-	private final String jobManagerAddress = "jobManager";
+	private final String dispatcherAddress = "dispatcher";
 	private final String resourceManagerAddress = "resourceManager";
+	private final String webMonitorAddress = "webMonitor";
 
 	private StandaloneHaServices standaloneHaServices;
 
 	@Before
 	public void setupTest() {
 
-		standaloneHaServices = new StandaloneHaServices(resourceManagerAddress, jobManagerAddress);
+		standaloneHaServices = new StandaloneHaServices(
+			resourceManagerAddress,
+			dispatcherAddress,
+			webMonitorAddress);
 	}
 
 	@After
@@ -97,8 +102,31 @@ public class StandaloneHaServicesTest extends TestLogger {
 		jmLeaderRetrievalService2.start(jmListener2);
 		rmLeaderRetrievalService.start(rmListener);
 
-		verify(jmListener1).notifyLeaderAddress(eq(jobManagerAddress), eq(HighAvailabilityServices.DEFAULT_LEADER_ID));
-		verify(jmListener2).notifyLeaderAddress(eq(jobManagerAddress), eq(HighAvailabilityServices.DEFAULT_LEADER_ID));
+		verify(jmListener1).notifyLeaderAddress(eq("UNKNOWN"), eq(HighAvailabilityServices.DEFAULT_LEADER_ID));
+		verify(jmListener2).notifyLeaderAddress(eq("UNKNOWN"), eq(HighAvailabilityServices.DEFAULT_LEADER_ID));
 		verify(rmListener).notifyLeaderAddress(eq(resourceManagerAddress), eq(HighAvailabilityServices.DEFAULT_LEADER_ID));
+	}
+
+	/**
+	 * Tests that the standalone leader retrieval services return the given address and the
+	 * fixed leader session id.
+	 */
+	@Test
+	public void testJobMasterLeaderRetrieval() throws Exception {
+		JobID jobId1 = new JobID();
+		JobID jobId2 = new JobID();
+		final String jobManagerAddress1 = "foobar";
+		final String jobManagerAddress2 = "barfoo";
+		LeaderRetrievalListener jmListener1 = mock(LeaderRetrievalListener.class);
+		LeaderRetrievalListener jmListener2 = mock(LeaderRetrievalListener.class);
+
+		LeaderRetrievalService jmLeaderRetrievalService1 = standaloneHaServices.getJobManagerLeaderRetriever(jobId1, jobManagerAddress1);
+		LeaderRetrievalService jmLeaderRetrievalService2 = standaloneHaServices.getJobManagerLeaderRetriever(jobId2, jobManagerAddress2);
+
+		jmLeaderRetrievalService1.start(jmListener1);
+		jmLeaderRetrievalService2.start(jmListener2);
+
+		verify(jmListener1).notifyLeaderAddress(eq(jobManagerAddress1), eq(HighAvailabilityServices.DEFAULT_LEADER_ID));
+		verify(jmListener2).notifyLeaderAddress(eq(jobManagerAddress2), eq(HighAvailabilityServices.DEFAULT_LEADER_ID));
 	}
 }

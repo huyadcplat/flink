@@ -18,69 +18,99 @@
 
 package org.apache.flink.runtime.jobmanager.scheduler;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.runtime.executiongraph.Execution;
+import org.apache.flink.runtime.instance.SlotSharingGroupId;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
+import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
 import org.apache.flink.util.Preconditions;
 
+import javax.annotation.Nullable;
+
+/**
+ * ScheduledUnit contains the information necessary to allocate a slot for the given task.
+ */
 public class ScheduledUnit {
-	
-	private final Execution vertexExecution;
-	
-	private final SlotSharingGroup sharingGroup;
-	
-	private final CoLocationConstraint locationConstraint;
-	
+
+	private final ExecutionVertexID executionVertexId;
+
+	private final SlotSharingGroupId slotSharingGroupId;
+
+	@Nullable
+	private final CoLocationConstraint coLocationConstraint;
+
 	// --------------------------------------------------------------------------------------------
-	
+
+	@VisibleForTesting
 	public ScheduledUnit(Execution task) {
-		Preconditions.checkNotNull(task);
-		
-		this.vertexExecution = task;
-		this.sharingGroup = null;
-		this.locationConstraint = null;
+		this(
+			task,
+			new SlotSharingGroupId());
 	}
-	
-	public ScheduledUnit(Execution task, SlotSharingGroup sharingUnit) {
-		Preconditions.checkNotNull(task);
-		
-		this.vertexExecution = task;
-		this.sharingGroup = sharingUnit;
-		this.locationConstraint = null;
+
+	public ScheduledUnit(Execution task, SlotSharingGroupId slotSharingGroupId) {
+		this(
+			task,
+			slotSharingGroupId,
+			null);
 	}
-	
-	public ScheduledUnit(Execution task, SlotSharingGroup sharingUnit, CoLocationConstraint locationConstraint) {
-		Preconditions.checkNotNull(task);
-		Preconditions.checkNotNull(sharingUnit);
-		Preconditions.checkNotNull(locationConstraint);
-		
-		this.vertexExecution = task;
-		this.sharingGroup = sharingUnit;
-		this.locationConstraint = locationConstraint;
+
+	public ScheduledUnit(
+			Execution task,
+			SlotSharingGroupId slotSharingGroupId,
+			@Nullable CoLocationConstraint coLocationConstraint) {
+		this(
+			Preconditions.checkNotNull(task).getVertex().getID(),
+			slotSharingGroupId,
+			coLocationConstraint);
+	}
+
+	@VisibleForTesting
+	public ScheduledUnit(
+			JobVertexID jobVertexId,
+			SlotSharingGroupId slotSharingGroupId,
+			@Nullable CoLocationConstraint coLocationConstraint) {
+		this(
+			new ExecutionVertexID(jobVertexId, 0),
+			slotSharingGroupId,
+			coLocationConstraint);
+	}
+
+	public ScheduledUnit(
+			ExecutionVertexID executionVertexId,
+			SlotSharingGroupId slotSharingGroupId,
+			@Nullable CoLocationConstraint coLocationConstraint) {
+
+		this.executionVertexId = Preconditions.checkNotNull(executionVertexId);
+		this.slotSharingGroupId = slotSharingGroupId;
+		this.coLocationConstraint = coLocationConstraint;
+
 	}
 
 	// --------------------------------------------------------------------------------------------
-	
+
 	public JobVertexID getJobVertexId() {
-		return this.vertexExecution.getVertex().getJobvertexId();
+		return executionVertexId.getJobVertexId();
 	}
-	
-	public Execution getTaskToExecute() {
-		return vertexExecution;
+
+	public int getSubtaskIndex() {
+		return executionVertexId.getSubtaskIndex();
 	}
-	
-	public SlotSharingGroup getSlotSharingGroup() {
-		return sharingGroup;
+
+	public SlotSharingGroupId getSlotSharingGroupId() {
+		return slotSharingGroupId;
 	}
-	
-	public CoLocationConstraint getLocationConstraint() {
-		return locationConstraint;
+
+	@Nullable
+	public CoLocationConstraint getCoLocationConstraint() {
+		return coLocationConstraint;
 	}
 
 	// --------------------------------------------------------------------------------------------
-	
+
 	@Override
 	public String toString() {
-		return "{task=" + vertexExecution.getVertexWithAttempt() + ", sharingUnit=" + sharingGroup + 
-				", locationConstraint=" + locationConstraint + '}';
+		return "{task=" + executionVertexId + ", sharingUnit=" + slotSharingGroupId +
+				", locationConstraint=" + coLocationConstraint + '}';
 	}
 }

@@ -25,14 +25,21 @@ under the License.
 	<parent>
 		<groupId>org.apache.flink</groupId>
 		<artifactId>flink-metrics</artifactId>
-		<version>1.4-SNAPSHOT</version>
+		<version>1.12-SNAPSHOT</version>
 		<relativePath>..</relativePath>
 	</parent>
 
 	<artifactId>flink-metrics-datadog</artifactId>
-	<name>flink-metrics-datadog</name>
+	<name>Flink : Metrics : Datadog</name>
 
 	<dependencies>
+		<dependency>
+			<groupId>org.apache.flink</groupId>
+			<artifactId>flink-annotations</artifactId>
+			<version>${project.version}</version>
+			<scope>provided</scope>
+		</dependency>
+
 		<dependency>
 			<groupId>org.apache.flink</groupId>
 			<artifactId>flink-metrics-core</artifactId>
@@ -41,8 +48,8 @@ under the License.
 		</dependency>
 
 		<dependency>
-			<groupId>com.fasterxml.jackson.core</groupId>
-			<artifactId>jackson-databind</artifactId>
+			<groupId>org.apache.flink</groupId>
+			<artifactId>flink-shaded-jackson</artifactId>
 			<scope>provided</scope>
 		</dependency>
 
@@ -53,26 +60,17 @@ under the License.
 		</dependency>
 
 		<dependency>
-			<groupId>com.squareup.okio</groupId>
-			<artifactId>okio</artifactId>
-			<version>1.12.0</version>
-		</dependency>
-
-
-		<!-- test dependencies -->
-
-		<dependency>
-			<groupId>org.apache.flink</groupId>
-			<artifactId>flink-runtime_${scala.binary.version}</artifactId>
-			<version>${project.version}</version>
-			<scope>test</scope>
-		</dependency>
-
-		<dependency>
 			<groupId>org.apache.flink</groupId>
 			<artifactId>flink-test-utils-junit</artifactId>
 			<version>${project.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.apache.flink</groupId>
+			<artifactId>flink-metrics-core</artifactId>
+			<version>${project.version}</version>
 			<scope>test</scope>
+			<type>test-jar</type>
 		</dependency>
 	</dependencies>
 
@@ -83,22 +81,19 @@ under the License.
 				<artifactId>maven-shade-plugin</artifactId>
 				<executions>
 					<execution>
+						<id>shade-flink</id>
 						<phase>package</phase>
 						<goals>
 							<goal>shade</goal>
 						</goals>
 						<configuration>
-							<shadedArtifactAttached>true</shadedArtifactAttached>
-							<relocations combine.children="append">
-								<relocation>
-									<pattern>okhttp3</pattern>
-									<shadedPattern>org.apache.flink.shaded.okhttp3</shadedPattern>
-								</relocation>
-								<relocation>
-									<pattern>okio</pattern>
-									<shadedPattern>org.apache.flink.shaded.okio</shadedPattern>
-								</relocation>
-							</relocations>
+							<artifactSet>
+								<includes>
+									<include>com.squareup.okhttp3:*</include>
+									<include>com.squareup.okio:*</include>
+								</includes>
+							</artifactSet>
+							<promoteTransitiveDependencies>true</promoteTransitiveDependencies>
 						</configuration>
 					</execution>
 				</executions>

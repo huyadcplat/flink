@@ -28,16 +28,18 @@ import org.apache.flink.test.util.TestBaseUtils;
 import org.apache.flink.types.IntValue;
 import org.apache.flink.types.LongValue;
 import org.apache.flink.types.NullValue;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 
-public class EdgeSourceDegreeTest
-extends AsmTestBase {
+/**
+ * Tests for {@link EdgeSourceDegree}.
+ */
+public class EdgeSourceDegreeTest extends AsmTestBase {
 
 	@Test
-	public void testWithSimpleGraph()
-			throws Exception {
+	public void testWithSimpleGraph() throws Exception {
 		String expectedResult =
 			"(0,1,((null),2))\n" +
 			"(0,2,((null),2))\n" +
@@ -55,7 +57,8 @@ extends AsmTestBase {
 			"(5,3,((null),1))";
 
 		DataSet<Edge<IntValue, Tuple2<NullValue, LongValue>>> sourceDegreeOnSourceId = undirectedSimpleGraph
-			.run(new EdgeSourceDegree<IntValue, NullValue, NullValue>());
+			.run(new EdgeSourceDegree<IntValue, NullValue, NullValue>()
+				.setReduceOnTargetId(false));
 
 		TestBaseUtils.compareResultAsText(sourceDegreeOnSourceId.collect(), expectedResult);
 
@@ -67,10 +70,40 @@ extends AsmTestBase {
 	}
 
 	@Test
-	public void testWithRMatGraph()
-			throws Exception {
+	public void testWithEmptyGraphWithVertices() throws Exception {
+		DataSet<Edge<LongValue, Tuple2<NullValue, LongValue>>> sourceDegreeOnSourceId = emptyGraphWithVertices
+			.run(new EdgeSourceDegree<LongValue, NullValue, NullValue>()
+				.setReduceOnTargetId(false));
+
+		assertEquals(0, sourceDegreeOnSourceId.collect().size());
+
+		DataSet<Edge<LongValue, Tuple2<NullValue, LongValue>>> sourceDegreeOnTargetId = emptyGraphWithVertices
+			.run(new EdgeSourceDegree<LongValue, NullValue, NullValue>()
+				.setReduceOnTargetId(true));
+
+		assertEquals(0, sourceDegreeOnTargetId.collect().size());
+	}
+
+	@Test
+	public void testWithEmptyGraphWithoutVertices() throws Exception {
+		DataSet<Edge<LongValue, Tuple2<NullValue, LongValue>>> sourceDegreeOnSourceId = emptyGraphWithoutVertices
+			.run(new EdgeSourceDegree<LongValue, NullValue, NullValue>()
+				.setReduceOnTargetId(false));
+
+		assertEquals(0, sourceDegreeOnSourceId.collect().size());
+
+		DataSet<Edge<LongValue, Tuple2<NullValue, LongValue>>> sourceDegreeOnTargetId = emptyGraphWithoutVertices
+			.run(new EdgeSourceDegree<LongValue, NullValue, NullValue>()
+				.setReduceOnTargetId(true));
+
+		assertEquals(0, sourceDegreeOnTargetId.collect().size());
+	}
+
+	@Test
+	public void testWithRMatGraph() throws Exception {
 		DataSet<Edge<LongValue, Tuple2<NullValue, LongValue>>> sourceDegreeOnSourceId = undirectedRMatGraph(10, 16)
-			.run(new EdgeSourceDegree<LongValue, NullValue, NullValue>());
+			.run(new EdgeSourceDegree<LongValue, NullValue, NullValue>()
+				.setReduceOnTargetId(false));
 
 		Checksum checksumOnSourceId = new ChecksumHashCode<Edge<LongValue, Tuple2<NullValue, LongValue>>>()
 			.run(sourceDegreeOnSourceId)

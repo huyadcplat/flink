@@ -27,13 +27,14 @@ import org.apache.flink.api.common.accumulators.IntCounter;
 import org.apache.flink.api.common.accumulators.LongCounter;
 import org.apache.flink.api.common.aggregators.Aggregator;
 import org.apache.flink.api.common.cache.DistributedCache;
+import org.apache.flink.api.common.externalresource.ExternalResourceInfo;
 import org.apache.flink.api.common.functions.AbstractRichFunction;
 import org.apache.flink.api.common.functions.BroadcastVariableInitializer;
 import org.apache.flink.api.common.functions.IterationRuntimeContext;
 import org.apache.flink.api.common.functions.RichFunction;
 import org.apache.flink.api.common.functions.RuntimeContext;
-import org.apache.flink.api.common.state.FoldingState;
-import org.apache.flink.api.common.state.FoldingStateDescriptor;
+import org.apache.flink.api.common.state.AggregatingState;
+import org.apache.flink.api.common.state.AggregatingStateDescriptor;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.MapState;
@@ -43,13 +44,12 @@ import org.apache.flink.api.common.state.ReducingStateDescriptor;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.metrics.MetricGroup;
-import org.apache.flink.streaming.api.functions.async.collector.AsyncCollector;
 import org.apache.flink.types.Value;
 import org.apache.flink.util.Preconditions;
 
 import java.io.Serializable;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
 /**
  * Rich variant of the {@link AsyncFunction}. As a {@link RichFunction}, it gives access to the
@@ -85,7 +85,7 @@ public abstract class RichAsyncFunction<IN, OUT> extends AbstractRichFunction im
 	}
 
 	@Override
-	public abstract void asyncInvoke(IN input, AsyncCollector<OUT> collector) throws Exception;
+	public abstract void asyncInvoke(IN input, ResultFuture<OUT> resultFuture) throws Exception;
 
 	// -----------------------------------------------------------------------------------------
 	// Wrapper classes
@@ -148,6 +148,16 @@ public abstract class RichAsyncFunction<IN, OUT> extends AbstractRichFunction im
 			return runtimeContext.getUserCodeClassLoader();
 		}
 
+		@Override
+		public void registerUserCodeClassLoaderReleaseHookIfAbsent(String releaseHookName, Runnable releaseHook) {
+			runtimeContext.registerUserCodeClassLoaderReleaseHookIfAbsent(releaseHookName, releaseHook);
+		}
+
+		@Override
+		public Set<ExternalResourceInfo> getExternalResourceInfos(String resourceName) {
+			return runtimeContext.getExternalResourceInfos(resourceName);
+		}
+
 		// -----------------------------------------------------------------------------------
 		// Unsupported operations
 		// -----------------------------------------------------------------------------------
@@ -173,7 +183,7 @@ public abstract class RichAsyncFunction<IN, OUT> extends AbstractRichFunction im
 		}
 
 		@Override
-		public <T, ACC> FoldingState<T, ACC> getFoldingState(FoldingStateDescriptor<T, ACC> stateProperties) {
+		public <IN, ACC, OUT> AggregatingState<IN, OUT> getAggregatingState(AggregatingStateDescriptor<IN, ACC, OUT> stateProperties) {
 			throw new UnsupportedOperationException("State is not supported in rich async functions.");
 		}
 
@@ -189,11 +199,6 @@ public abstract class RichAsyncFunction<IN, OUT> extends AbstractRichFunction im
 
 		@Override
 		public <V, A extends Serializable> Accumulator<V, A> getAccumulator(String name) {
-			throw new UnsupportedOperationException("Accumulators are not supported in rich async functions.");
-		}
-
-		@Override
-		public Map<String, Accumulator<?, ?>> getAllAccumulators() {
 			throw new UnsupportedOperationException("Accumulators are not supported in rich async functions.");
 		}
 

@@ -19,7 +19,9 @@
 package org.apache.flink.core.fs;
 
 import org.apache.flink.core.testutils.CheckedThread;
+import org.apache.flink.util.AbstractCloseableRegistry;
 import org.apache.flink.util.ExceptionUtils;
+
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Rule;
@@ -30,41 +32,75 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class SafetyNetCloseableRegistryTest {
+/**
+ * Tests for the {@link SafetyNetCloseableRegistry}.
+ */
+public class SafetyNetCloseableRegistryTest
+	extends AbstractCloseableRegistryTest<WrappingProxyCloseable<? extends Closeable>,
+	SafetyNetCloseableRegistry.PhantomDelegatingCloseableRef> {
 
 	@Rule
 	public final TemporaryFolder tmpFolder = new TemporaryFolder();
 
-	private ProducerThread[] streamOpenThreads;
-	private SafetyNetCloseableRegistry closeableRegistry;
-	private AtomicInteger unclosedCounter;
+	@Override
+	protected void registerCloseable(final Closeable closeable) throws IOException {
+		final WrappingProxyCloseable<Closeable> wrappingProxyCloseable = new WrappingProxyCloseable<Closeable>() {
 
-	public void setup() {
-		Assert.assertFalse(SafetyNetCloseableRegistry.isReaperThreadRunning());
-		this.closeableRegistry = new SafetyNetCloseableRegistry();
-		this.unclosedCounter = new AtomicInteger(0);
-		this.streamOpenThreads = new ProducerThread[10];
-		for (int i = 0; i < streamOpenThreads.length; ++i) {
-			streamOpenThreads[i] = new ProducerThread(closeableRegistry, unclosedCounter, Integer.MAX_VALUE);
-		}
+			@Override
+			public void close() throws IOException {
+				closeable.close();
+			}
+
+			@Override
+			public Closeable getWrappedDelegate() {
+				return closeable;
+			}
+		};
+		closeableRegistry.registerCloseable(wrappingProxyCloseable);
+	}
+
+	@Override
+	protected AbstractCloseableRegistry<
+		WrappingProxyCloseable<? extends Closeable>,
+		SafetyNetCloseableRegistry.PhantomDelegatingCloseableRef> createRegistry() {
+
+		return new SafetyNetCloseableRegistry();
+	}
+
+	@Override
+	protected AbstractCloseableRegistryTest.ProducerThread<
+		WrappingProxyCloseable<? extends Closeable>,
+		SafetyNetCloseableRegistry.PhantomDelegatingCloseableRef> createProducerThread(
+		AbstractCloseableRegistry<
+			WrappingProxyCloseable<? extends Closeable>,
+			SafetyNetCloseableRegistry.PhantomDelegatingCloseableRef> registry,
+		AtomicInteger unclosedCounter,
+		int maxStreams) {
+
+		return new AbstractCloseableRegistryTest.ProducerThread
+			<WrappingProxyCloseable<? extends Closeable>,
+				SafetyNetCloseableRegistry.PhantomDelegatingCloseableRef>(registry, unclosedCounter, maxStreams) {
+
+			int count = 0;
+
+			@Override
+			protected void createAndRegisterStream() throws IOException {
+				String debug = Thread.currentThread().getName() + " " + count;
+				TestStream testStream = new TestStream(refCount);
+
+				// this method automatically registers the stream with the given registry.
+				@SuppressWarnings("unused")
+				ClosingFSDataInputStream pis = ClosingFSDataInputStream.wrapSafe(
+					testStream, (SafetyNetCloseableRegistry) registry,
+					debug); //reference dies here
+				++count;
+			}
+		};
 	}
 
 	@After
 	public void tearDown() {
 		Assert.assertFalse(SafetyNetCloseableRegistry.isReaperThreadRunning());
-	}
-
-	private void startThreads(int maxStreams) {
-		for (ProducerThread t : streamOpenThreads) {
-			t.setMaxStreams(maxStreams);
-			t.start();
-		}
-	}
-
-	private void joinThreads() throws InterruptedException {
-		for (Thread t : streamOpenThreads) {
-			t.join();
-		}
 	}
 
 	@Test
@@ -84,7 +120,7 @@ public class SafetyNetCloseableRegistryTest {
 
 					Path tmp = new Path(tmpFolder.newFolder().toURI().toString(), "test_file");
 
-					try (FSDataOutputStream stream = fs1.create(tmp, false)) {
+					try (FSDataOutputStream stream = fs1.create(tmp, FileSystem.WriteMode.NO_OVERWRITE)) {
 						CheckedThread t2 = new CheckedThread() {
 							@Override
 							public void go() {
@@ -133,51 +169,9 @@ public class SafetyNetCloseableRegistryTest {
 	}
 
 	@Test
-	public void testClose() throws Exception {
-
-		setup();
-		startThreads(Integer.MAX_VALUE);
-
-		for (int i = 0; i < 5; ++i) {
-			System.gc();
-			Thread.sleep(40);
-		}
-
-		closeableRegistry.close();
-
-		joinThreads();
-
-		Assert.assertEquals(0, unclosedCounter.get());
-
-		try {
-
-			WrappingProxyCloseable<Closeable> testCloseable = new WrappingProxyCloseable<Closeable>() {
-				@Override
-				public Closeable getWrappedDelegate() {
-					return this;
-				}
-
-				@Override
-				public void close() throws IOException {
-					unclosedCounter.incrementAndGet();
-				}
-			};
-
-			closeableRegistry.registerClosable(testCloseable);
-
-			Assert.fail("Closed registry should not accept closeables!");
-
-		} catch (IOException expected) {
-			//expected
-		}
-
-		Assert.assertEquals(1, unclosedCounter.get());
-	}
-
-	@Test
 	public void testSafetyNetClose() throws Exception {
-		setup();
-		startThreads(20);
+		setup(20);
+		startThreads();
 
 		joinThreads();
 
@@ -194,10 +188,10 @@ public class SafetyNetCloseableRegistryTest {
 	public void testReaperThreadSpawnAndStop() throws Exception {
 		Assert.assertFalse(SafetyNetCloseableRegistry.isReaperThreadRunning());
 
-		try (SafetyNetCloseableRegistry r1 = new SafetyNetCloseableRegistry()) {
+		try (SafetyNetCloseableRegistry ignored = new SafetyNetCloseableRegistry()) {
 			Assert.assertTrue(SafetyNetCloseableRegistry.isReaperThreadRunning());
 
-			try (SafetyNetCloseableRegistry r2 = new SafetyNetCloseableRegistry()) {
+			try (SafetyNetCloseableRegistry ignored2 = new SafetyNetCloseableRegistry()) {
 				Assert.assertTrue(SafetyNetCloseableRegistry.isReaperThreadRunning());
 			}
 			Assert.assertTrue(SafetyNetCloseableRegistry.isReaperThreadRunning());
@@ -205,84 +199,31 @@ public class SafetyNetCloseableRegistryTest {
 		Assert.assertFalse(SafetyNetCloseableRegistry.isReaperThreadRunning());
 	}
 
-	//------------------------------------------------------------------------------------------------------------------
+	/**
+	 * Test whether failure to start thread in {@link SafetyNetCloseableRegistry}
+	 * constructor can lead to failure of subsequent state check.
+	 */
+	@Test
+	public void testReaperThreadStartFailed() throws Exception {
 
-	private static final class ProducerThread extends Thread {
-
-		private final SafetyNetCloseableRegistry registry;
-		private final AtomicInteger refCount;
-		private int maxStreams;
-
-		public ProducerThread(SafetyNetCloseableRegistry registry, AtomicInteger refCount, int maxStreams) {
-			this.registry = registry;
-			this.refCount = refCount;
-			this.maxStreams = maxStreams;
+		try {
+			new SafetyNetCloseableRegistry(() -> new OutOfMemoryReaperThread());
+		} catch (java.lang.OutOfMemoryError error) {
 		}
+		Assert.assertFalse(SafetyNetCloseableRegistry.isReaperThreadRunning());
 
-		public int getMaxStreams() {
-			return maxStreams;
-		}
+		// the OOM error will not lead to failure of subsequent constructor call.
+		SafetyNetCloseableRegistry closeableRegistry = new SafetyNetCloseableRegistry();
+		Assert.assertTrue(SafetyNetCloseableRegistry.isReaperThreadRunning());
 
-		public void setMaxStreams(int maxStreams) {
-			this.maxStreams = maxStreams;
-		}
-
-		@Override
-		public void run() {
-			try {
-				int count = 0;
-				while (maxStreams > 0) {
-					String debug = Thread.currentThread().getName() + " " + count;
-					TestStream testStream = new TestStream(refCount);
-					refCount.incrementAndGet();
-
-					@SuppressWarnings("unused")
-					ClosingFSDataInputStream pis = ClosingFSDataInputStream.wrapSafe(testStream, registry, debug); //reference dies here
-
-					try {
-						Thread.sleep(2);
-					} catch (InterruptedException ignored) {}
-
-					if (maxStreams != Integer.MAX_VALUE) {
-						--maxStreams;
-					}
-					++count;
-				}
-			} catch (Exception ex) {
-				// ignored
-			}
-		}
+		closeableRegistry.close();
 	}
 
-	private static final class TestStream extends FSDataInputStream {
-
-		private AtomicInteger refCount;
-
-		public TestStream(AtomicInteger refCount) {
-			this.refCount = refCount;
-		}
+	private static class OutOfMemoryReaperThread extends SafetyNetCloseableRegistry.CloseableReaperThread {
 
 		@Override
-		public void seek(long desired) throws IOException {
-
-		}
-
-		@Override
-		public long getPos() throws IOException {
-			return 0;
-		}
-
-		@Override
-		public int read() throws IOException {
-			return 0;
-		}
-
-		@Override
-		public void close() throws IOException {
-			if (refCount != null) {
-				refCount.decrementAndGet();
-				refCount = null;
-			}
+		public synchronized void start() {
+			throw new java.lang.OutOfMemoryError();
 		}
 	}
 }

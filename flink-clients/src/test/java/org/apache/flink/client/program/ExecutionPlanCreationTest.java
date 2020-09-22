@@ -18,13 +18,14 @@
 
 package org.apache.flink.client.program;
 
+import org.apache.flink.api.common.Plan;
 import org.apache.flink.api.common.ProgramDescription;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.optimizer.DataStatistics;
 import org.apache.flink.optimizer.Optimizer;
 import org.apache.flink.optimizer.costs.DefaultCostEstimator;
@@ -48,19 +49,22 @@ public class ExecutionPlanCreationTest {
 	@Test
 	public void testGetExecutionPlan() {
 		try {
-			PackagedProgram prg = new PackagedProgram(TestOptimizerPlan.class, "/dev/random", "/tmp");
-			assertNotNull(prg.getPreviewPlan());
+			PackagedProgram prg = PackagedProgram.newBuilder()
+				.setEntryPointClassName(TestOptimizerPlan.class.getName())
+				.setArguments("/dev/random", "/tmp")
+				.build();
 
 			InetAddress mockAddress = InetAddress.getLocalHost();
 			InetSocketAddress mockJmAddress = new InetSocketAddress(mockAddress, 12345);
 
 			Configuration config = new Configuration();
 
-			config.setString(ConfigConstants.JOB_MANAGER_IPC_ADDRESS_KEY, mockJmAddress.getHostName());
-			config.setInteger(ConfigConstants.JOB_MANAGER_IPC_PORT_KEY, mockJmAddress.getPort());
+			config.setString(JobManagerOptions.ADDRESS, mockJmAddress.getHostName());
+			config.setInteger(JobManagerOptions.PORT, mockJmAddress.getPort());
 
 			Optimizer optimizer = new Optimizer(new DataStatistics(), new DefaultCostEstimator(), config);
-			OptimizedPlan op = (OptimizedPlan) ClusterClient.getOptimizedPlan(optimizer, prg, -1);
+			Plan plan = (Plan) PackagedProgramUtils.getPipelineFromProgram(prg, config, -1, true);
+			OptimizedPlan op = optimizer.compile(plan);
 			assertNotNull(op);
 
 			PlanJSONDumpGenerator dumper = new PlanJSONDumpGenerator();

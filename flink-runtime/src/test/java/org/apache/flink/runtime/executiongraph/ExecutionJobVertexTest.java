@@ -20,16 +20,13 @@ package org.apache.flink.runtime.executiongraph;
 
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.runtime.JobException;
-import org.apache.flink.runtime.concurrent.Executors;
+import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.runtime.testutils.DirectScheduledExecutorService;
+
 import org.junit.Assert;
 import org.junit.Test;
-
-import java.io.IOException;
-
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 public class ExecutionJobVertexTest {
 
@@ -62,9 +59,14 @@ public class ExecutionJobVertexTest {
 		} catch (IllegalArgumentException ignore) {
 		}
 
-		// test configured / trumps computed default
-		executionJobVertex = createExecutionJobVertex(172, 4);
-		Assert.assertEquals(4, executionJobVertex.getMaxParallelism());
+		// parallelism must be smaller than the max parallelism
+		try {
+			createExecutionJobVertex(172, 4);
+			Assert.fail("We should not be able to create an ExecutionJobVertex which " +
+				"has a smaller max parallelism than parallelism.");
+		} catch (JobException ignored) {
+			// expected
+		}
 
 
 		// test configured / trumps computed default
@@ -118,10 +120,9 @@ public class ExecutionJobVertexTest {
 
 	//------------------------------------------------------------------------------------------------------
 
-	private static ExecutionJobVertex createExecutionJobVertex(
+	public static ExecutionJobVertex createExecutionJobVertex(
 			int parallelism,
-			int preconfiguredMaxParallelism) throws JobException, IOException {
-
+			int preconfiguredMaxParallelism) throws JobException, JobExecutionException {
 		JobVertex jobVertex = new JobVertex("testVertex");
 		jobVertex.setInvokableClass(AbstractInvokable.class);
 		jobVertex.setParallelism(parallelism);
@@ -130,11 +131,16 @@ public class ExecutionJobVertexTest {
 			jobVertex.setMaxParallelism(preconfiguredMaxParallelism);
 		}
 
-		ExecutionGraph executionGraphMock = mock(ExecutionGraph.class);
-		when(executionGraphMock.getFutureExecutor()).thenReturn(Executors.directExecutor());
-		ExecutionJobVertex executionJobVertex =
-				new ExecutionJobVertex(executionGraphMock, jobVertex, 1, Time.seconds(10));
+		ExecutionGraph executionGraph = createExecutionGraph();
+		return new ExecutionJobVertex(executionGraph, jobVertex, 1, Time.seconds(10));
+	}
 
-		return executionJobVertex;
+	private static ExecutionGraph createExecutionGraph() throws JobException, JobExecutionException {
+		final ExecutionGraph executionGraph = TestingExecutionGraphBuilder
+			.newBuilder()
+			.setFutureExecutor(new DirectScheduledExecutorService())
+			.build();
+		executionGraph.transitionToRunning();
+		return executionGraph;
 	}
 }

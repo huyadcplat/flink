@@ -22,9 +22,9 @@ import org.apache.flink.core.fs.FSDataInputStream;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.state.StreamStateHandle;
-import org.apache.flink.util.FileUtils;
 
 import java.io.IOException;
+import java.util.Optional;
 
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
@@ -32,16 +32,16 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * {@link StreamStateHandle} for state that was written to a file stream. The written data is
- * identifier by the file path. The state can be read again by calling {@link #openInputStream()}.
+ * identified by the file path. The state can be read again by calling {@link #openInputStream()}.
  */
 public class FileStateHandle implements StreamStateHandle {
 
 	private static final long serialVersionUID = 350284443258002355L;
 
-	/** The path to the file in the filesystem, fully describing the file system */
+	/** The path to the file in the filesystem, fully describing the file system. */
 	private final Path filePath;
 
-	/** The size of the state in the file */
+	/** The size of the state in the file. */
 	private final long stateSize;
 
 	/**
@@ -69,6 +69,11 @@ public class FileStateHandle implements StreamStateHandle {
 		return getFileSystem().open(filePath);
 	}
 
+	@Override
+	public Optional<byte[]> asBytesIfInMemory() {
+		return Optional.empty();
+	}
+
 	/**
 	 * Discard the state by deleting the file that stores the state. If the parent directory
 	 * of the state is empty after deleting the state file, it is also deleted.
@@ -77,14 +82,8 @@ public class FileStateHandle implements StreamStateHandle {
 	 */
 	@Override
 	public void discardState() throws Exception {
-
 		FileSystem fs = getFileSystem();
-
 		fs.delete(filePath, false);
-
-		try {
-			FileUtils.deletePathIfEmpty(fs, filePath.getParent());
-		} catch (Exception ignored) {}
 	}
 
 	/**

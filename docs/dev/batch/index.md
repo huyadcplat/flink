@@ -1,7 +1,7 @@
 ---
 title: "Flink DataSet API Programming Guide"
 nav-id: batch
-nav-title: Batch (DataSet API)
+nav-title: DataSet API
 nav-parent_id: dev
 nav-pos: 30
 nav-show_overview: true
@@ -32,11 +32,12 @@ example write the data to (distributed) files, or to standard output (for exampl
 terminal). Flink programs run in a variety of contexts, standalone, or embedded in other programs.
 The execution can happen in a local JVM, or on clusters of many machines.
 
-Please see [basic concepts]({{ site.baseurl }}/dev/api_concepts.html) for an introduction
-to the basic concepts of the Flink API.
+Please refer to the [DataStream API overview]({% link dev/datastream_api.md %})
+for an introduction to the basic concepts of the Flink API. That overview is
+for the DataStream API but the basic concepts of the two APIs are the same.
 
 In order to create your own Flink DataSet program, we encourage you to start with the
-[anatomy of a Flink Program]({{ site.baseurl }}/dev/api_concepts.html#anatomy-of-a-flink-program)
+[anatomy of a Flink Program]({% link dev/datastream_api.md %}#anatomy-of-a-flink-program)
 and gradually add your own
 [transformations](#dataset-transformations). The remaining sections act as references for additional
 operations and advanced features.
@@ -49,7 +50,7 @@ Example Program
 
 The following program is a complete, working example of WordCount. You can copy &amp; paste the code
 to run it locally. You only have to include the correct Flink's library into your project
-(see Section [Linking with Flink]({{ site.baseurl }}/dev/linking_with_flink.html)) and specify the imports. Then you are ready
+(see Section [Linking with Flink]({{ site.baseurl }}/dev/project-configuration.html)) and specify the imports. Then you are ready
 to go!
 
 <div class="codetabs" markdown="1">
@@ -205,12 +206,17 @@ data.filter(new FilterFunction<Integer>() {
       <td><strong>Reduce</strong></td>
       <td>
         <p>Combines a group of elements into a single element by repeatedly combining two elements
-        into one. Reduce may be applied on a full data set, or on a grouped data set.</p>
+        into one. Reduce may be applied on a full data set or on a grouped data set.</p>
 {% highlight java %}
 data.reduce(new ReduceFunction<Integer> {
   public Integer reduce(Integer a, Integer b) { return a + b; }
 });
 {% endhighlight %}
+        <p>If the reduce was applied to a grouped data set then you can specify the way that the
+        runtime executes the combine phase of the reduce by supplying a <code>CombineHint</code> to
+        <code>setCombineHint</code>. The hash-based strategy should be faster in most cases,
+        especially if the number of different keys is small compared to the number of input
+        elements (eg. 1/10).</p>
       </td>
     </tr>
 
@@ -218,7 +224,7 @@ data.reduce(new ReduceFunction<Integer> {
       <td><strong>ReduceGroup</strong></td>
       <td>
         <p>Combines a group of elements into one or more elements. ReduceGroup may be applied on a
-        full data set, or on a grouped data set.</p>
+        full data set or on a grouped data set.</p>
 {% highlight java %}
 data.reduceGroup(new GroupReduceFunction<Integer, Integer> {
   public void reduce(Iterable<Integer> values, Collector<Integer> out) {
@@ -230,10 +236,6 @@ data.reduceGroup(new GroupReduceFunction<Integer, Integer> {
   }
 });
 {% endhighlight %}
-        <p>If the reduce was applied to a grouped data set, you can specify the way that the
-        runtime executes the combine phase of the reduce via supplying a CombineHint as a second
-        parameter. The hash-based strategy should be faster in most cases, especially if the
-        number of different keys is small compared to the number of input elements (eg. 1/10).</p>
       </td>
     </tr>
 
@@ -248,10 +250,10 @@ Dataset<Tuple3<Integer, String, Double>> input = // [...]
 DataSet<Tuple3<Integer, String, Double>> output = input.aggregate(SUM, 0).and(MIN, 2);
 {% endhighlight %}
 	<p>You can also use short-hand syntax for minimum, maximum, and sum aggregations.</p>
-	{% highlight java %}
-	Dataset<Tuple3<Integer, String, Double>> input = // [...]
+{% highlight java %}
+Dataset<Tuple3<Integer, String, Double>> input = // [...]
 DataSet<Tuple3<Integer, String, Double>> output = input.sum(0).andMin(2);
-	{% endhighlight %}
+{% endhighlight %}
       </td>
     </tr>
 
@@ -260,9 +262,14 @@ DataSet<Tuple3<Integer, String, Double>> output = input.sum(0).andMin(2);
       <td>
         <p>Returns the distinct elements of a data set. It removes the duplicate entries
         from the input DataSet, with respect to all fields of the elements, or a subset of fields.</p>
-    {% highlight java %}
-        data.distinct();
-    {% endhighlight %}
+{% highlight java %}
+data.distinct();
+{% endhighlight %}
+        <p>Distinct is implemented using a reduce function. You can specify the way that the
+        runtime executes the combine phase of the reduce by supplying a <code>CombineHint</code> to
+        <code>setCombineHint</code>. The hash-based strategy should be faster in most cases,
+        especially if the number of different keys is small compared to the number of input
+        elements (eg. 1/10).</p>
       </td>
     </tr>
 
@@ -272,7 +279,7 @@ DataSet<Tuple3<Integer, String, Double>> output = input.sum(0).andMin(2);
         Joins two data sets by creating all pairs of elements that are equal on their keys.
         Optionally uses a JoinFunction to turn the pair of elements into a single element, or a
         FlatJoinFunction to turn the pair of elements into arbitrarily many (including none)
-        elements. See the <a href="{{ site.baseurl }}/dev/api_concepts.html#specifying-keys">keys section</a> to learn how to define join keys.
+        elements. See the <a href="#specifying-keys">keys section</a> to learn how to define join keys.
 {% highlight java %}
 result = input1.join(input2)
                .where(0)       // key of the first input (tuple field 0)
@@ -282,12 +289,12 @@ result = input1.join(input2)
         describe whether the join happens through partitioning or broadcasting, and whether it uses
         a sort-based or a hash-based algorithm. Please refer to the
         <a href="dataset_transformations.html#join-algorithm-hints">Transformations Guide</a> for
-        a list of possible hints and an example.</br>
+        a list of possible hints and an example.<br>
         If no hint is specified, the system will try to make an estimate of the input sizes and
         pick the best strategy according to those estimates.
 {% highlight java %}
 // This executes a join by broadcasting the first data set
-// using a hash table for the broadcasted data
+// using a hash table for the broadcast data
 result = input1.join(input2, JoinHint.BROADCAST_HASH_FIRST)
                .where(0).equalTo(1);
 {% endhighlight %}
@@ -298,7 +305,7 @@ result = input1.join(input2, JoinHint.BROADCAST_HASH_FIRST)
     <tr>
       <td><strong>OuterJoin</strong></td>
       <td>
-        Performs a left, right, or full outer join on two data sets. Outer joins are similar to regular (inner) joins and create all pairs of elements that are equal on their keys. In addition, records of the "outer" side (left, right, or both in case of full) are preserved if no matching key is found in the other side. Matching pairs of elements (or one element and a <code>null</code> value for the other input) are given to a JoinFunction to turn the pair of elements into a single element, or to a FlatJoinFunction to turn the pair of elements into arbitrarily many (including none)         elements. See the <a href="{{ site.baseurl }}/dev/api_concepts.html#specifying-keys">keys section</a> to learn how to define join keys.
+        Performs a left, right, or full outer join on two data sets. Outer joins are similar to regular (inner) joins and create all pairs of elements that are equal on their keys. In addition, records of the "outer" side (left, right, or both in case of full) are preserved if no matching key is found in the other side. Matching pairs of elements (or one element and a <code>null</code> value for the other input) are given to a JoinFunction to turn the pair of elements into a single element, or to a FlatJoinFunction to turn the pair of elements into arbitrarily many (including none)         elements. See the <a href="#specifying-keys">keys section</a> to learn how to define join keys.
 {% highlight java %}
 input1.leftOuterJoin(input2) // rightOuterJoin or fullOuterJoin for right or full outer joins
       .where(0)              // key of the first input (tuple field 0)
@@ -320,7 +327,7 @@ input1.leftOuterJoin(input2) // rightOuterJoin or fullOuterJoin for right or ful
       <td>
         <p>The two-dimensional variant of the reduce operation. Groups each input on one or more
         fields and then joins the groups. The transformation function is called per pair of groups.
-        See the <a href="{{ site.baseurl }}/dev/api_concepts.html#specifying-keys">keys section</a> to learn how to define coGroup keys.</p>
+        See the <a href="#specifying-keys">keys section</a> to learn how to define coGroup keys.</p>
 {% highlight java %}
 data1.coGroup(data2)
      .where(0)
@@ -395,12 +402,14 @@ DataSet<Integer> result = in.partitionByRange(0)
     <tr>
       <td><strong>Custom Partitioning</strong></td>
       <td>
-        <p>Manually specify a partitioning over the data.
+        <p>Assigns records based on a key to a specific partition using a custom Partitioner function. 
+          The key can be specified as position key, expression key, and key selector function.
           <br/>
-          <i>Note</i>: This method works only on single field keys.</p>
+          <i>Note</i>: This method only works with a single field key.</p>
 {% highlight java %}
 DataSet<Tuple2<String,Integer>> in = // [...]
-DataSet<Integer> result = in.partitionCustom(Partitioner<K> partitioner, key)
+DataSet<Integer> result = in.partitionCustom(partitioner, key)
+                            .mapPartition(new PartitionMapper());
 {% endhighlight %}
       </td>
     </tr>
@@ -565,7 +574,7 @@ data.reduceGroup { elements => elements.sum }
         data set.</p>
 {% highlight scala %}
 val input: DataSet[(Int, String, Double)] = // [...]
-val output: DataSet[(Int, String, Doublr)] = input.aggregate(SUM, 0).aggregate(MIN, 2);
+val output: DataSet[(Int, String, Double)] = input.aggregate(SUM, 0).aggregate(MIN, 2)
 {% endhighlight %}
   <p>You can also use short-hand syntax for minimum, maximum, and sum aggregations.</p>
 {% highlight scala %}
@@ -580,19 +589,19 @@ val output: DataSet[(Int, String, Double)] = input.sum(0).min(2)
       <td>
         <p>Returns the distinct elements of a data set. It removes the duplicate entries
         from the input DataSet, with respect to all fields of the elements, or a subset of fields.</p>
-      {% highlight scala %}
-         data.distinct()
-      {% endhighlight %}
+{% highlight scala %}
+data.distinct()
+{% endhighlight %}
       </td>
     </tr>
 
-    </tr>
+    <tr>
       <td><strong>Join</strong></td>
       <td>
         Joins two data sets by creating all pairs of elements that are equal on their keys.
         Optionally uses a JoinFunction to turn the pair of elements into a single element, or a
         FlatJoinFunction to turn the pair of elements into arbitrarily many (including none)
-        elements. See the <a href="{{ site.baseurl }}/dev/api_concepts.html#specifying-keys">keys section</a> to learn how to define join keys.
+        elements. See the <a href="#specifying-keys">keys section</a> to learn how to define join keys.
 {% highlight scala %}
 // In this case tuple fields are used as keys. "0" is the join field on the first tuple
 // "1" is the join field on the second tuple.
@@ -602,12 +611,12 @@ val result = input1.join(input2).where(0).equalTo(1)
         describe whether the join happens through partitioning or broadcasting, and whether it uses
         a sort-based or a hash-based algorithm. Please refer to the
         <a href="dataset_transformations.html#join-algorithm-hints">Transformations Guide</a> for
-        a list of possible hints and an example.</br>
+        a list of possible hints and an example.<br />
         If no hint is specified, the system will try to make an estimate of the input sizes and
         pick the best strategy according to those estimates.
 {% highlight scala %}
 // This executes a join by broadcasting the first data set
-// using a hash table for the broadcasted data
+// using a hash table for the broadcast data
 val result = input1.join(input2, JoinHint.BROADCAST_HASH_FIRST)
                    .where(0).equalTo(1)
 {% endhighlight %}
@@ -618,7 +627,7 @@ val result = input1.join(input2, JoinHint.BROADCAST_HASH_FIRST)
     <tr>
       <td><strong>OuterJoin</strong></td>
       <td>
-        Performs a left, right, or full outer join on two data sets. Outer joins are similar to regular (inner) joins and create all pairs of elements that are equal on their keys. In addition, records of the "outer" side (left, right, or both in case of full) are preserved if no matching key is found in the other side. Matching pairs of elements (or one element and a `null` value for the other input) are given to a JoinFunction to turn the pair of elements into a single element, or to a FlatJoinFunction to turn the pair of elements into arbitrarily many (including none)         elements. See the <a href="{{ site.baseurl }}/dev/api_concepts.html#specifying-keys">keys section</a> to learn how to define join keys.
+        Performs a left, right, or full outer join on two data sets. Outer joins are similar to regular (inner) joins and create all pairs of elements that are equal on their keys. In addition, records of the "outer" side (left, right, or both in case of full) are preserved if no matching key is found in the other side. Matching pairs of elements (or one element and a `null` value for the other input) are given to a JoinFunction to turn the pair of elements into a single element, or to a FlatJoinFunction to turn the pair of elements into arbitrarily many (including none)         elements. See the <a href="#specifying-keys">keys section</a> to learn how to define join keys.
 {% highlight scala %}
 val joined = left.leftOuterJoin(right).where(0).equalTo(1) {
    (left, right) =>
@@ -634,7 +643,7 @@ val joined = left.leftOuterJoin(right).where(0).equalTo(1) {
       <td>
         <p>The two-dimensional variant of the reduce operation. Groups each input on one or more
         fields and then joins the groups. The transformation function is called per pair of groups.
-        See the <a href="{{ site.baseurl }}/dev/api_concepts.html#specifying-keys">keys section</a> to learn how to define coGroup keys.</p>
+        See the <a href="#specifying-keys">keys section</a> to learn how to define coGroup keys.</p>
 {% highlight scala %}
 data1.coGroup(data2).where(0).equalTo(1)
 {% endhighlight %}
@@ -652,7 +661,7 @@ val data1: DataSet[Int] = // [...]
 val data2: DataSet[String] = // [...]
 val result: DataSet[(Int, String)] = data1.cross(data2)
 {% endhighlight %}
-        <p>Note: Cross is potentially a <b>very</b> compute-intensive operation which can challenge even large compute clusters! It is adviced to hint the system with the DataSet sizes by using <i>crossWithTiny()</i> and <i>crossWithHuge()</i>.</p>
+        <p>Note: Cross is potentially a <b>very</b> compute-intensive operation which can challenge even large compute clusters! It is advised to hint the system with the DataSet sizes by using <i>crossWithTiny()</i> and <i>crossWithHuge()</i>.</p>
       </td>
     </tr>
     <tr>
@@ -694,17 +703,17 @@ val result = in.partitionByRange(0).mapPartition { ... }
 {% endhighlight %}
       </td>
     </tr>
-    </tr>
     <tr>
       <td><strong>Custom Partitioning</strong></td>
       <td>
-        <p>Manually specify a partitioning over the data.
+        <p>Assigns records based on a key to a specific partition using a custom Partitioner function. 
+          The key can be specified as position key, expression key, and key selector function.
           <br/>
-          <i>Note</i>: This method works only on single field keys.</p>
+          <i>Note</i>: This method only works with a single field key.</p>
 {% highlight scala %}
 val in: DataSet[(Int, String)] = // [...]
 val result = in
-  .partitionCustom(partitioner: Partitioner[K], key)
+  .partitionCustom(partitioner, key).mapPartition { ... }
 {% endhighlight %}
       </td>
     </tr>
@@ -788,6 +797,230 @@ possible for [Data Sources](#data-sources) and [Data Sinks](#data-sinks).
 
 {% top %}
 
+Specifying Keys
+---------------
+
+Some transformations (join, coGroup, groupBy) require that a key be defined on
+a collection of elements. Other transformations (Reduce, GroupReduce,
+Aggregate) allow data being grouped on a key before they are
+applied.
+
+A DataSet is grouped as
+{% highlight java %}
+DataSet<...> input = // [...]
+DataSet<...> reduced = input
+  .groupBy(/*define key here*/)
+  .reduceGroup(/*do something*/);
+{% endhighlight %}
+
+The data model of Flink is not based on key-value pairs. Therefore,
+you do not need to physically pack the data set types into keys and
+values. Keys are "virtual": they are defined as functions over the
+actual data to guide the grouping operator.
+
+### Define keys for Tuples
+{:.no_toc}
+
+The simplest case is grouping Tuples on one or more
+fields of the Tuple:
+
+<div class="codetabs" markdown="1">
+<div data-lang="java" markdown="1">
+{% highlight java %}
+DataSet<Tuple3<Integer,String,Long>> input = // [...]
+UnsortedGrouping<Tuple3<Integer,String,Long>,Tuple> keyed = input.groupBy(0)
+{% endhighlight %}
+</div>
+<div data-lang="scala" markdown="1">
+{% highlight scala %}
+val input: DataSet[(Int, String, Long)] = // [...]
+val keyed = input.groupBy(0)
+{% endhighlight %}
+</div>
+</div>
+
+The tuples are grouped on the first field (the one of
+Integer type).
+
+<div class="codetabs" markdown="1">
+<div data-lang="java" markdown="1">
+{% highlight java %}
+DataSet<Tuple3<Integer,String,Long>> input = // [...]
+UnsortedGrouping<Tuple3<Integer,String,Long>,Tuple> keyed = input.groupBy(0,1)
+{% endhighlight %}
+</div>
+<div data-lang="scala" markdown="1">
+{% highlight scala %}
+val input: DataSet[(Int, String, Long)] = // [...]
+val grouped = input.groupBy(0,1)
+{% endhighlight %}
+</div>
+</div>
+
+Here, we group the tuples on a composite key consisting of the first and the
+second field.
+
+A note on nested Tuples: If you have a DataSet with a nested tuple, such as:
+
+{% highlight java %}
+DataSet<Tuple3<Tuple2<Integer, Float>,String,Long>> ds;
+{% endhighlight %}
+
+Specifying `groupBy(0)` will cause the system to use the full `Tuple2` as a key (with the Integer and Float being the key). If you want to "navigate" into the nested `Tuple2`, you have to use field expression keys which are explained below.
+
+### Define keys using Field Expressions
+{:.no_toc}
+
+You can use String-based field expressions to reference nested fields and define keys for grouping, sorting, joining, or coGrouping.
+
+Field expressions make it very easy to select fields in (nested) composite types such as [Tuple](#tuples-and-case-classes) and [POJO](#pojos) types.
+
+<div class="codetabs" markdown="1">
+<div data-lang="java" markdown="1">
+
+In the example below, we have a `WC` POJO with two fields "word" and "count". To group by the field `word`, we just pass its name to the `groupBy()` function.
+{% highlight java %}
+// some ordinary POJO (Plain old Java Object)
+public class WC {
+  public String word;
+  public int count;
+}
+DataSet<WC> words = // [...]
+DataSet<WC> wordCounts = words.groupBy("word")
+{% endhighlight %}
+
+**Field Expression Syntax**:
+
+- Select POJO fields by their field name. For example `"user"` refers to the "user" field of a POJO type.
+
+- Select Tuple fields by their field name or 0-offset field index. For example `"f0"` and `"5"` refer to the first and sixth field of a Java Tuple type, respectively.
+
+- You can select nested fields in POJOs and Tuples. For example `"user.zip"` refers to the "zip" field of a POJO which is stored in the "user" field of a POJO type. Arbitrary nesting and mixing of POJOs and Tuples is supported such as `"f1.user.zip"` or `"user.f3.1.zip"`.
+
+- You can select the full type using the `"*"` wildcard expressions. This does also work for types which are not Tuple or POJO types.
+
+**Field Expression Example**:
+
+{% highlight java %}
+public static class WC {
+  public ComplexNestedClass complex; //nested POJO
+  private int count;
+  // getter / setter for private field (count)
+  public int getCount() {
+    return count;
+  }
+  public void setCount(int c) {
+    this.count = c;
+  }
+}
+public static class ComplexNestedClass {
+  public Integer someNumber;
+  public float someFloat;
+  public Tuple3<Long, Long, String> word;
+  public IntWritable hadoopCitizen;
+}
+{% endhighlight %}
+
+These are valid field expressions for the example code above:
+
+- `"count"`: The count field in the `WC` class.
+
+- `"complex"`: Recursively selects all fields of the field complex of POJO type `ComplexNestedClass`.
+
+- `"complex.word.f2"`: Selects the last field of the nested `Tuple3`.
+
+- `"complex.hadoopCitizen"`: Selects the Hadoop `IntWritable` type.
+
+</div>
+<div data-lang="scala" markdown="1">
+
+In the example below, we have a `WC` POJO with two fields "word" and "count". To group by the field `word`, we just pass its name to the `groupBy()` function.
+{% highlight scala %}
+// some ordinary POJO (Plain old Java Object)
+class WC(var word: String, var count: Int) {
+  def this() { this("", 0L) }
+}
+val words: DataSet[WC] = // [...]
+val wordCounts = words.groupBy("word")
+
+// or, as a case class, which is less typing
+case class WC(word: String, count: Int)
+val words: DataSet[WC] = // [...]
+val wordCounts = words.groupBy("word")
+{% endhighlight %}
+
+**Field Expression Syntax**:
+
+- Select POJO fields by their field name. For example `"user"` refers to the "user" field of a POJO type.
+
+- Select Tuple fields by their 1-offset field name or 0-offset field index. For example `"_1"` and `"5"` refer to the first and sixth field of a Scala Tuple type, respectively.
+
+- You can select nested fields in POJOs and Tuples. For example `"user.zip"` refers to the "zip" field of a POJO which is stored in the "user" field of a POJO type. Arbitrary nesting and mixing of POJOs and Tuples is supported such as `"_2.user.zip"` or `"user._4.1.zip"`.
+
+- You can select the full type using the `"_"` wildcard expressions. This does also work for types which are not Tuple or POJO types.
+
+**Field Expression Example**:
+
+{% highlight scala %}
+class WC(var complex: ComplexNestedClass, var count: Int) {
+  def this() { this(null, 0) }
+}
+
+class ComplexNestedClass(
+    var someNumber: Int,
+    someFloat: Float,
+    word: (Long, Long, String),
+    hadoopCitizen: IntWritable) {
+  def this() { this(0, 0, (0, 0, ""), new IntWritable(0)) }
+}
+{% endhighlight %}
+
+These are valid field expressions for the example code above:
+
+- `"count"`: The count field in the `WC` class.
+
+- `"complex"`: Recursively selects all fields of the field complex of POJO type `ComplexNestedClass`.
+
+- `"complex.word._3"`: Selects the last field of the nested `Tuple3`.
+
+- `"complex.hadoopCitizen"`: Selects the Hadoop `IntWritable` type.
+
+</div>
+</div>
+
+### Define keys using Key Selector Functions
+{:.no_toc}
+
+An additional way to define keys are "key selector" functions. A key selector function
+takes a single element as input and returns the key for the element. The key can be of any type and be derived from deterministic computations.
+
+The following example shows a key selector function that simply returns the field of an object:
+
+<div class="codetabs" markdown="1">
+<div data-lang="java" markdown="1">
+{% highlight java %}
+// some ordinary POJO
+public class WC {public String word; public int count;}
+DataSet<WC> words = // [...]
+UnsortedGrouping<WC> keyed = words
+  .groupBy(new KeySelector<WC, String>() {
+     public String getKey(WC wc) { return wc.word; }
+   });
+{% endhighlight %}
+
+</div>
+<div data-lang="scala" markdown="1">
+{% highlight scala %}
+// some ordinary case class
+case class WC(word: String, count: Int)
+val words: DataSet[WC] = // [...]
+val keyed = words.groupBy( _.word )
+{% endhighlight %}
+</div>
+</div>
+
+{% top %}
+
 Data Sources
 ------------
 
@@ -818,16 +1051,10 @@ File-based:
 - `readFileOfPrimitives(path, delimiter, Class)` / `PrimitiveInputFormat` - Parses files of new-line (or another char sequence)
    delimited primitive data types such as `String` or `Integer` using the given delimiter.
 
-- `readHadoopFile(FileInputFormat, Key, Value, path)` / `FileInputFormat` - Creates a JobConf and reads file from the specified
-   path with the specified FileInputFormat, Key class and Value class and returns them as Tuple2<Key, Value>.
-
-- `readSequenceFile(Key, Value, path)` / `SequenceFileInputFormat` - Creates a JobConf and reads file from the specified path with
-   type SequenceFileInputFormat, Key class and Value class and returns them as Tuple2<Key, Value>.
-
 
 Collection-based:
 
-- `fromCollection(Collection)` - Creates a data set from the Java Java.util.Collection. All elements
+- `fromCollection(Collection)` - Creates a data set from a Java.util.Collection. All elements
   in the collection must be of the same type.
 
 - `fromCollection(Iterator, Class)` - Creates a data set from an iterator. The class specifies the
@@ -856,7 +1083,7 @@ ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 // read text file from local files system
 DataSet<String> localLines = env.readTextFile("file:///path/to/my/textfile");
 
-// read text file from a HDFS running at nnHost:nnPort
+// read text file from an HDFS running at nnHost:nnPort
 DataSet<String> hdfsLines = env.readTextFile("hdfs://nnHost:nnPort/path/to/my/textfile");
 
 // read a CSV file with three fields
@@ -872,14 +1099,9 @@ DataSet<Tuple2<String, Double>> csvInput = env.readCsvFile("hdfs:///the/CSV/file
 DataSet<Person>> csvInput = env.readCsvFile("hdfs:///the/CSV/file")
                          .pojoType(Person.class, "name", "age", "zipcode");
 
-
-// read a file from the specified path of type TextInputFormat
-DataSet<Tuple2<LongWritable, Text>> tuples =
- env.readHadoopFile(new TextInputFormat(), LongWritable.class, Text.class, "hdfs://nnHost:nnPort/path/to/file");
-
 // read a file from the specified path of type SequenceFileInputFormat
 DataSet<Tuple2<IntWritable, Text>> tuples =
- env.readSequenceFile(IntWritable.class, Text.class, "hdfs://nnHost:nnPort/path/to/file");
+ env.createInput(HadoopInputs.readSequenceFile(IntWritable.class, Text.class, "hdfs://nnHost:nnPort/path/to/file"));
 
 // creates a set from some given elements
 DataSet<String> value = env.fromElements("Foo", "bar", "foobar", "fubar");
@@ -890,14 +1112,12 @@ DataSet<Long> numbers = env.generateSequence(1, 10000000);
 // Read data from a relational database using the JDBC input format
 DataSet<Tuple2<String, Integer> dbData =
     env.createInput(
-      // create and configure input format
-      JDBCInputFormat.buildJDBCInputFormat()
+      JdbcInputFormat.buildJdbcInputFormat()
                      .setDrivername("org.apache.derby.jdbc.EmbeddedDriver")
                      .setDBUrl("jdbc:derby:memory:persons")
                      .setQuery("select name, age from persons")
-                     .finish(),
-      // specify type information for DataSet
-      new TupleTypeInfo(Tuple2.class, STRING_TYPE_INFO, INT_TYPE_INFO)
+                     .setRowTypeInfo(new RowTypeInfo(BasicTypeInfo.STRING_TYPE_INFO, BasicTypeInfo.INT_TYPE_INFO))
+                     .finish()
     );
 
 // Note: Flink's program compiler needs to infer the data types of the data items which are returned
@@ -970,16 +1190,13 @@ File-based:
 - `readFileOfPrimitives(path, delimiter)` / `PrimitiveInputFormat` - Parses files of new-line (or another char sequence)
   delimited primitive data types such as `String` or `Integer` using the given delimiter.
 
-- `readHadoopFile(FileInputFormat, Key, Value, path)` / `FileInputFormat` - Creates a JobConf and reads file from the specified
-   path with the specified FileInputFormat, Key class and Value class and returns them as Tuple2<Key, Value>.
-
 - `readSequenceFile(Key, Value, path)` / `SequenceFileInputFormat` - Creates a JobConf and reads file from the specified path with
    type SequenceFileInputFormat, Key class and Value class and returns them as Tuple2<Key, Value>.
 
 Collection-based:
 
-- `fromCollection(Seq)` - Creates a data set from a Seq. All elements
-  in the collection must be of the same type.
+- `fromCollection(Iterable)` - Creates a data set from an Iterable. All elements
+  returned by the Iterable must be of the same type.
 
 - `fromCollection(Iterator)` - Creates a data set from an Iterator. The class specifies the
   data type of the elements returned by the iterator.
@@ -990,7 +1207,7 @@ Collection-based:
 - `fromParallelCollection(SplittableIterator)` - Creates a data set from an iterator, in
   parallel. The class specifies the data type of the elements returned by the iterator.
 
-- `generateSequence(from, to)` - Generates the squence of numbers in the given interval, in
+- `generateSequence(from, to)` - Generates the sequence of numbers in the given interval, in
   parallel.
 
 Generic:
@@ -1007,7 +1224,7 @@ val env  = ExecutionEnvironment.getExecutionEnvironment
 // read text file from local files system
 val localLines = env.readTextFile("file:///path/to/my/textfile")
 
-// read text file from a HDFS running at nnHost:nnPort
+// read text file from an HDFS running at nnHost:nnPort
 val hdfsLines = env.readTextFile("hdfs://nnHost:nnPort/path/to/my/textfile")
 
 // read a CSV file with three fields
@@ -1033,15 +1250,11 @@ val csvInput = env.readCsvFile[Person](
 val values = env.fromElements("Foo", "bar", "foobar", "fubar")
 
 // generate a number sequence
-val numbers = env.generateSequence(1, 10000000);
-
-// read a file from the specified path of type TextInputFormat
-val tuples = env.readHadoopFile(new TextInputFormat, classOf[LongWritable],
- classOf[Text], "hdfs://nnHost:nnPort/path/to/file")
+val numbers = env.generateSequence(1, 10000000)
 
 // read a file from the specified path of type SequenceFileInputFormat
-val tuples = env.readSequenceFile(classOf[IntWritable], classOf[Text],
- "hdfs://nnHost:nnPort/path/to/file")
+val tuples = env.createInput(HadoopInputs.readSequenceFile(classOf[IntWritable], classOf[Text],
+ "hdfs://nnHost:nnPort/path/to/file"))
 
 {% endhighlight %}
 
@@ -1142,7 +1355,7 @@ using an
 Flink comes with a variety of built-in output formats that are encapsulated behind operations on the
 DataSet:
 
-- `writeAsText()` / `TextOuputFormat` - Writes elements line-wise as Strings. The Strings are
+- `writeAsText()` / `TextOutputFormat` - Writes elements line-wise as Strings. The Strings are
   obtained by calling the *toString()* method of each element.
 - `writeAsFormattedText()` / `TextOutputFormat` - Write elements line-wise as Strings. The Strings
   are obtained by calling a user-defined *format()* method for each element.
@@ -1171,7 +1384,7 @@ DataSet<String> textData = // [...]
 // write DataSet to a file on the local file system
 textData.writeAsText("file:///my/result/on/localFS");
 
-// write DataSet to a file on a HDFS with a namenode running at nnHost:nnPort
+// write DataSet to a file on an HDFS with a namenode running at nnHost:nnPort
 textData.writeAsText("hdfs://nnHost:nnPort/my/result/on/localFS");
 
 // write DataSet to a file and overwrite the file if it exists
@@ -1201,7 +1414,7 @@ DataSet<Tuple3<String, Integer, Double>> myResult = [...]
 // write Tuple DataSet to a relational database
 myResult.output(
     // build and configure OutputFormat
-    JDBCOutputFormat.buildJDBCOutputFormat()
+    JdbcOutputFormat.buildJdbcOutputFormat()
                     .setDrivername("org.apache.derby.jdbc.EmbeddedDriver")
                     .setDBUrl("jdbc:derby:memory:persons")
                     .setQuery("insert into persons (name, age, height) values (?,?,?)")
@@ -1211,7 +1424,7 @@ myResult.output(
 
 #### Locally Sorted Output
 
-The output of a data sink can be locally sorted on specified fields in specified orders using [tuple field positions]({{ site.baseurl }}/dev/api_concepts.html#define-keys-for-tuples) or [field expressions]({{ site.baseurl }}/dev/api_concepts.html#define-keys-using-field-expressions). This works for every output format.
+The output of a data sink can be locally sorted on specified fields in specified orders using [tuple field positions](#define-keys-for-tuples) or [field expressions](#define-keys-using-field-expressions). This works for every output format.
 
 The following examples show how to use this feature:
 
@@ -1273,7 +1486,7 @@ val textData: DataSet[String] = // [...]
 // write DataSet to a file on the local file system
 textData.writeAsText("file:///my/result/on/localFS")
 
-// write DataSet to a file on a HDFS with a namenode running at nnHost:nnPort
+// write DataSet to a file on an HDFS with a namenode running at nnHost:nnPort
 textData.writeAsText("hdfs://nnHost:nnPort/my/result/on/localFS")
 
 // write DataSet to a file and overwrite the file if it exists
@@ -1284,7 +1497,7 @@ val values: DataSet[(String, Int, Double)] = // [...]
 values.writeAsCsv("file:///path/to/the/result/file", "\n", "|")
 
 // this writes tuples in the text formatting "(a, b, c)", rather than as CSV lines
-values.writeAsText("file:///path/to/the/result/file");
+values.writeAsText("file:///path/to/the/result/file")
 
 // this writes values as strings using a user-defined formatting
 values map { tuple => tuple._1 + " - " + tuple._2 }
@@ -1294,7 +1507,7 @@ values map { tuple => tuple._1 + " - " + tuple._2 }
 
 #### Locally Sorted Output
 
-The output of a data sink can be locally sorted on specified fields in specified orders using [tuple field positions]({{ site.baseurl }}/dev/api_concepts.html#define-keys-for-tuples) or [field expressions]({{ site.baseurl }}/dev/api_concepts.html#define-keys-using-field-expressions). This works for every output format.
+The output of a data sink can be locally sorted on specified fields in specified orders using [tuple field positions](#define-keys-for-tuples) or [field expressions](#define-keys-using-field-expressions). This works for every output format.
 
 The following examples show how to use this feature:
 
@@ -1305,19 +1518,19 @@ val pData: DataSet[(BookPojo, Double)] = // [...]
 val sData: DataSet[String] = // [...]
 
 // sort output on String field in ascending order
-tData.sortPartition(1, Order.ASCENDING).print;
+tData.sortPartition(1, Order.ASCENDING).print()
 
 // sort output on Double field in descending and Int field in ascending order
-tData.sortPartition(2, Order.DESCENDING).sortPartition(0, Order.ASCENDING).print;
+tData.sortPartition(2, Order.DESCENDING).sortPartition(0, Order.ASCENDING).print()
 
 // sort output on the "author" field of nested BookPojo in descending order
-pData.sortPartition("_1.author", Order.DESCENDING).writeAsText(...);
+pData.sortPartition("_1.author", Order.DESCENDING).writeAsText(...)
 
 // sort output on the full tuple in ascending order
-tData.sortPartition("_", Order.ASCENDING).writeAsCsv(...);
+tData.sortPartition("_", Order.ASCENDING).writeAsCsv(...)
 
 // sort atomic type (String) output in descending order
-sData.sortPartition("_", Order.DESCENDING).writeAsText(...);
+sData.sortPartition("_", Order.DESCENDING).writeAsText(...)
 
 {% endhighlight %}
 
@@ -1482,7 +1695,7 @@ val result = count map { c => c / 10000.0 * 4 }
 
 result.print()
 
-env.execute("Iterative Pi Example");
+env.execute("Iterative Pi Example")
 {% endhighlight %}
 
 You can also check out the
@@ -1626,7 +1839,7 @@ In object-reuse enabled mode, Flink's runtime minimizes the number of object ins
    <tr>
       <td><strong>Emitting Input Objects</strong></td>
       <td>
-        You <strong>must not</strong> emit input objects, except for input objects of MapFunction, FlatMapFunction, MapPartitionFunction, GroupReduceFunction, GroupCombineFunction, CoGroupFunction, and InputFormat.next(reuse).</td>
+        You <strong>must not</strong> emit input objects, except for input objects of MapFunction, FlatMapFunction, MapPartitionFunction, GroupReduceFunction, GroupCombineFunction, CoGroupFunction, and InputFormat.next(reuse).
       </td>
    </tr>
    <tr>
@@ -1689,7 +1902,7 @@ val env = ExecutionEnvironment.createLocalEnvironment()
 val lines = env.readTextFile(pathToTextFile)
 // build your program
 
-env.execute();
+env.execute()
 {% endhighlight %}
 </div>
 </div>
@@ -1783,7 +1996,7 @@ This information is used by the optimizer to infer whether a data property such 
 partitioning is preserved by a function.
 For functions that operate on groups of input elements such as `GroupReduce`, `GroupCombine`, `CoGroup`, and `MapPartition`, all fields that are defined as forwarded fields must always be jointly forwarded from the same input element. The forwarded fields of each element that is emitted by a group-wise function may originate from a different element of the function's input group.
 
-Field forward information is specified using [field expressions]({{ site.baseurl }}/dev/api_concepts.html#define-keys-using-field-expressions).
+Field forward information is specified using [field expressions](#define-keys-using-field-expressions).
 Fields that are forwarded to the same position in the output can be specified by their position.
 The specified position must be valid for the input and output data type and have the same type.
 For example the String `"f2"` declares that the third field of a Java input tuple is always equal to the third field in the output tuple.
@@ -1852,7 +2065,7 @@ Non-forwarded field information for group-wise operators such as `GroupReduce`, 
 **IMPORTANT**: The specification of non-forwarded fields information is optional. However if used,
 **ALL!** non-forwarded fields must be specified, because all other fields are considered to be forwarded in place. It is safe to declare a forwarded field as non-forwarded.
 
-Non-forwarded fields are specified as a list of [field expressions]({{ site.baseurl }}/dev/api_concepts.html#define-keys-using-field-expressions). The list can be either given as a single String with field expressions separated by semicolons or as multiple Strings.
+Non-forwarded fields are specified as a list of [field expressions](#define-keys-using-field-expressions). The list can be either given as a single String with field expressions separated by semicolons or as multiple Strings.
 For example both `"f1; f3"` and `"f1", "f3"` declare that the second and fourth field of a Java tuple
 are not preserved in place and all other fields are preserved in place.
 Non-forwarded field information can only be specified for functions which have identical input and output types.
@@ -1903,7 +2116,7 @@ Fields which are only unmodified forwarded to the output without evaluating thei
 **IMPORTANT**: The specification of read fields information is optional. However if used,
 **ALL!** read fields must be specified. It is safe to declare a non-read field as read.
 
-Read fields are specified as a list of [field expressions]({{ site.baseurl }}/dev/api_concepts.html#define-keys-using-field-expressions). The list can be either given as a single String with field expressions separated by semicolons or as multiple Strings.
+Read fields are specified as a list of [field expressions](#define-keys-using-field-expressions). The list can be either given as a single String with field expressions separated by semicolons or as multiple Strings.
 For example both `"f1; f3"` and `"f1", "f3"` declare that the second and fourth field of a Java tuple are read and evaluated by the function.
 
 Read field information is specified as function class annotations using the following annotations:
@@ -1968,7 +2181,7 @@ Collection.
 <div class="codetabs" markdown="1">
 <div data-lang="java" markdown="1">
 {% highlight java %}
-// 1. The DataSet to be broadcasted
+// 1. The DataSet to be broadcast
 DataSet<Integer> toBroadcast = env.fromElements(1, 2, 3);
 
 DataSet<String> data = env.fromElements("a", "b");
@@ -1976,7 +2189,7 @@ DataSet<String> data = env.fromElements("a", "b");
 data.map(new RichMapFunction<String, String>() {
     @Override
     public void open(Configuration parameters) throws Exception {
-      // 3. Access the broadcasted DataSet as a Collection
+      // 3. Access the broadcast DataSet as a Collection
       Collection<Integer> broadcastSet = getRuntimeContext().getBroadcastVariable("broadcastSetName");
     }
 
@@ -1989,13 +2202,13 @@ data.map(new RichMapFunction<String, String>() {
 {% endhighlight %}
 
 Make sure that the names (`broadcastSetName` in the previous example) match when registering and
-accessing broadcasted data sets. For a complete example program, have a look at
+accessing broadcast data sets. For a complete example program, have a look at
 {% gh_link /flink-examples/flink-examples-batch/src/main/java/org/apache/flink/examples/java/clustering/KMeans.java "K-Means Algorithm" %}.
 </div>
 <div data-lang="scala" markdown="1">
 
 {% highlight scala %}
-// 1. The DataSet to be broadcasted
+// 1. The DataSet to be broadcast
 val toBroadcast = env.fromElements(1, 2, 3)
 
 val data = env.fromElements("a", "b")
@@ -2004,7 +2217,7 @@ data.map(new RichMapFunction[String, String]() {
     var broadcastSet: Traversable[String] = null
 
     override def open(config: Configuration): Unit = {
-      // 3. Access the broadcasted DataSet as a Collection
+      // 3. Access the broadcast DataSet as a Collection
       broadcastSet = getRuntimeContext().getBroadcastVariable[String]("broadcastSetName").asScala
     }
 
@@ -2015,7 +2228,7 @@ data.map(new RichMapFunction[String, String]() {
 {% endhighlight %}
 
 Make sure that the names (`broadcastSetName` in the previous example) match when registering and
-accessing broadcasted data sets. For a complete example program, have a look at
+accessing broadcast data sets. For a complete example program, have a look at
 {% gh_link /flink-examples/flink-examples-batch/src/main/scala/org/apache/flink/examples/scala/clustering/KMeans.scala "KMeans Algorithm" %}.
 </div>
 </div>
@@ -2057,7 +2270,7 @@ DataSet<Integer> result = input.map(new MyMapper());
 env.execute();
 {% endhighlight %}
 
-Access the cached file or directory in a user function (here a `MapFunction`). The function must extend a [RichFunction]({{ site.baseurl }}/dev/api_concepts.html#rich-functions) class because it needs access to the `RuntimeContext`.
+Access the cached file or directory in a user function (here a `MapFunction`). The function must extend a [RichFunction]({% link dev/user_defined_functions.md %}#rich-functions) class because it needs access to the `RuntimeContext`.
 
 {% highlight java %}
 
@@ -2103,7 +2316,7 @@ val result: DataSet[Integer] = input.map(new MyMapper())
 env.execute()
 {% endhighlight %}
 
-Access the cached file in a user function (here a `MapFunction`). The function must extend a [RichFunction]({{ site.baseurl }}/dev/api_concepts.html#rich-functions) class because it needs access to the `RuntimeContext`.
+Access the cached file in a user function (here a `MapFunction`). The function must extend a [RichFunction]({% link dev/user_defined_functions.md %}#rich-functions) class because it needs access to the `RuntimeContext`.
 
 {% highlight scala %}
 
@@ -2134,8 +2347,6 @@ Passing Parameters to Functions
 -------------------
 
 Parameters can be passed to functions using either the constructor or the `withParameters(Configuration)` method. The parameters are serialized as part of the function object and shipped to all parallel task instances.
-
-Check also the [best practices guide on how to pass command line arguments to functions]({{ site.baseurl }}/dev/best_practices.html#parsing-command-line-arguments-and-passing-them-around-in-your-flink-application).
 
 #### Via Constructor
 
@@ -2178,7 +2389,7 @@ class MyFilter(limit: Int) extends FilterFunction[Int] {
 
 #### Via `withParameters(Configuration)`
 
-This method takes a Configuration object as an argument, which will be passed to the [rich function]({{ site.baseurl }}/dev/api_concepts.html#rich-functions)'s `open()`
+This method takes a Configuration object as an argument, which will be passed to the [rich function]({% link dev/user_defined_functions.md %}#rich-functions)'s `open()`
 method. The Configuration object is a Map from String keys to different value types.
 
 <div class="codetabs" markdown="1">

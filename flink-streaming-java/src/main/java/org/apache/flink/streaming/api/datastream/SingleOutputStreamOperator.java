@@ -21,22 +21,21 @@ import org.apache.flink.annotation.Public;
 import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.functions.InvalidTypesException;
 import org.apache.flink.api.common.operators.ResourceSpec;
+import org.apache.flink.api.common.operators.util.OperatorValidationUtils;
 import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.java.typeutils.TypeInfoParser;
+import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.operators.ChainingStrategy;
-import org.apache.flink.streaming.api.transformations.PartitionTransformation;
+import org.apache.flink.streaming.api.transformations.PhysicalTransformation;
 import org.apache.flink.streaming.api.transformations.SideOutputTransformation;
-import org.apache.flink.streaming.api.transformations.StreamTransformation;
-import org.apache.flink.streaming.runtime.partitioner.StreamPartitioner;
 import org.apache.flink.util.OutputTag;
-import org.apache.flink.util.Preconditions;
 
 import java.util.HashMap;
 import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
+import static org.apache.flink.util.Preconditions.checkArgument;
 
 /**
  * {@code SingleOutputStreamOperator} represents a user defined transformation
@@ -55,9 +54,9 @@ public class SingleOutputStreamOperator<T> extends DataStream<T> {
 	 * we can catch the case when a side output with a matching id is requested for a different
 	 * type because this would lead to problems at runtime.
 	 */
-	private Map<OutputTag<?>, TypeInformation> requestedSideOutputs = new HashMap<>();
+	private Map<OutputTag<?>, TypeInformation<?>> requestedSideOutputs = new HashMap<>();
 
-	protected SingleOutputStreamOperator(StreamExecutionEnvironment environment, StreamTransformation<T> transformation) {
+	protected SingleOutputStreamOperator(StreamExecutionEnvironment environment, Transformation<T> transformation) {
 		super(environment, transformation);
 	}
 
@@ -130,19 +129,14 @@ public class SingleOutputStreamOperator<T> extends DataStream<T> {
 	}
 
 	/**
-	 * Sets the parallelism for this operator. The degree must be 1 or more.
+	 * Sets the parallelism for this operator.
 	 *
 	 * @param parallelism
 	 *            The parallelism for this operator.
 	 * @return The operator with set parallelism.
 	 */
 	public SingleOutputStreamOperator<T> setParallelism(int parallelism) {
-		Preconditions.checkArgument(parallelism > 0,
-				"The parallelism of an operator must be at least 1.");
-
-		Preconditions.checkArgument(canBeParallel() || parallelism == 1,
-				"The parallelism of non parallel operator must be 1.");
-
+		OperatorValidationUtils.validateParallelism(parallelism, canBeParallel());
 		transformation.setParallelism(parallelism);
 
 		return this;
@@ -159,12 +153,7 @@ public class SingleOutputStreamOperator<T> extends DataStream<T> {
 	 */
 	@PublicEvolving
 	public SingleOutputStreamOperator<T> setMaxParallelism(int maxParallelism) {
-		Preconditions.checkArgument(maxParallelism > 0,
-				"The maximum parallelism must be greater than 0.");
-
-		Preconditions.checkArgument(canBeParallel() || maxParallelism == 1,
-				"The maximum parallelism of non parallel operator must be 1.");
-
+		OperatorValidationUtils.validateMaxParallelism(maxParallelism, canBeParallel());
 		transformation.setMaxParallelism(maxParallelism);
 
 		return this;
@@ -184,11 +173,6 @@ public class SingleOutputStreamOperator<T> extends DataStream<T> {
 	 * @return The operator with set minimum and preferred resources.
 	 */
 	private SingleOutputStreamOperator<T> setResources(ResourceSpec minResources, ResourceSpec preferredResources) {
-		Preconditions.checkNotNull(minResources, "The min resources must be not null.");
-		Preconditions.checkNotNull(preferredResources, "The preferred resources must be not null.");
-		Preconditions.checkArgument(minResources.isValid() && preferredResources.isValid() && minResources.lessThanOrEqual(preferredResources),
-				"The values in resources must be not less than 0 and the preferred resources must be greater than the min resources.");
-
 		transformation.setResources(minResources, preferredResources);
 
 		return this;
@@ -201,9 +185,6 @@ public class SingleOutputStreamOperator<T> extends DataStream<T> {
 	 * @return The operator with set minimum and preferred resources.
 	 */
 	private SingleOutputStreamOperator<T> setResources(ResourceSpec resources) {
-		Preconditions.checkNotNull(resources, "The resources must be not null.");
-		Preconditions.checkArgument(resources.isValid(), "The values in resources must be not less than 0.");
-
 		transformation.setResources(resources, resources);
 
 		return this;
@@ -228,14 +209,23 @@ public class SingleOutputStreamOperator<T> extends DataStream<T> {
 	}
 
 	/**
-	 * Sets the maximum time frequency (ms) for the flushing of the output
-	 * buffer. By default the output buffers flush only when they are full.
+	 * Sets the buffering timeout for data produced by this operation.
+	 * The timeout defines how long data may linger in a partially full buffer
+	 * before being sent over the network.
+	 *
+	 * <p>Lower timeouts lead to lower tail latencies, but may affect throughput.
+	 * Timeouts of 1 ms still sustain high throughput, even for jobs with high parallelism.
+	 *
+	 * <p>A value of '-1' means that the default buffer timeout should be used. A value
+	 * of '0' indicates that no buffering should happen, and all records/events should be
+	 * immediately sent through the network, without additional buffering.
 	 *
 	 * @param timeoutMillis
 	 *            The maximum time between two output flushes.
 	 * @return The operator with buffer timeout set.
 	 */
 	public SingleOutputStreamOperator<T> setBufferTimeout(long timeoutMillis) {
+		checkArgument(timeoutMillis >= -1, "timeout must be >= -1");
 		transformation.setBufferTimeout(timeoutMillis);
 		return this;
 	}
@@ -251,7 +241,11 @@ public class SingleOutputStreamOperator<T> extends DataStream<T> {
 	 */
 	@PublicEvolving
 	private SingleOutputStreamOperator<T> setChainingStrategy(ChainingStrategy strategy) {
-		this.transformation.setChainingStrategy(strategy);
+		if (transformation instanceof PhysicalTransformation) {
+			((PhysicalTransformation<T>) transformation).setChainingStrategy(strategy);
+		} else {
+			throw new UnsupportedOperationException("Cannot set chaining strategy on " + transformation);
+		}
 		return this;
 	}
 
@@ -359,58 +353,9 @@ public class SingleOutputStreamOperator<T> extends DataStream<T> {
 		return this;
 	}
 
-	/**
-	 * Adds a type information hint about the return type of this operator.
-	 *
-	 * <p>Type hints are important in cases where the Java compiler throws away generic type
-	 * information necessary for efficient execution.
-	 *
-	 * <p>This method takes a type information string that will be parsed. A type information string
-	 * can contain the following types:
-	 *
-	 * <ul>
-	 * <li>Basic types such as <code>Integer</code>, <code>String</code>, etc.
-	 * <li>Basic type arrays such as <code>Integer[]</code>,
-	 * <code>String[]</code>, etc.
-	 * <li>Tuple types such as <code>Tuple1&lt;TYPE0&gt;</code>,
-	 * <code>Tuple2&lt;TYPE0, TYPE1&gt;</code>, etc.</li>
-	 * <li>Pojo types such as <code>org.my.MyPojo&lt;myFieldName=TYPE0,myFieldName2=TYPE1&gt;</code>, etc.</li>
-	 * <li>Generic types such as <code>java.lang.Class</code>, etc.
-	 * <li>Custom type arrays such as <code>org.my.CustomClass[]</code>,
-	 * <code>org.my.CustomClass$StaticInnerClass[]</code>, etc.
-	 * <li>Value types such as <code>DoubleValue</code>,
-	 * <code>StringValue</code>, <code>IntegerValue</code>, etc.</li>
-	 * <li>Tuple array types such as <code>Tuple2&lt;TYPE0,TYPE1&gt;[], etc.</code></li>
-	 * <li>Writable types such as <code>Writable&lt;org.my.CustomWritable&gt;</code></li>
-	 * <li>Enum types such as <code>Enum&lt;org.my.CustomEnum&gt;</code></li>
-	 * </ul>
-	 *
-	 * <p>Example:
-	 * <code>"Tuple2&lt;String,Tuple2&lt;Integer,org.my.MyJob$Pojo&lt;word=String&gt;&gt;&gt;"</code>
-	 *
-	 * @param typeInfoString
-	 *            type information string to be parsed
-	 * @return This operator with a given return type hint.
-	 *
-	 * @deprecated Please use {@link #returns(Class)} or {@link #returns(TypeHint)} instead.
-	 */
-	@Deprecated
-	@PublicEvolving
-	public SingleOutputStreamOperator<T> returns(String typeInfoString) {
-		if (typeInfoString == null) {
-			throw new IllegalArgumentException("Type information string must not be null.");
-		}
-		return returns(TypeInfoParser.<T>parse(typeInfoString));
-	}
-
 	// ------------------------------------------------------------------------
 	//  Miscellaneous
 	// ------------------------------------------------------------------------
-
-	@Override
-	protected DataStream<T> setConnectionType(StreamPartitioner<T> partitioner) {
-		return new SingleOutputStreamOperator<>(this.getExecutionEnvironment(), new PartitionTransformation<>(this.getTransformation(), partitioner));
-	}
 
 	/**
 	 * Sets the slot sharing group of this operation. Parallel instances of

@@ -17,8 +17,10 @@
 
 package org.apache.flink.streaming.connectors.rabbitmq.common;
 
-import com.rabbitmq.client.ConnectionFactory;
+import org.apache.flink.streaming.connectors.rabbitmq.RMQSource;
 import org.apache.flink.util.Preconditions;
+
+import com.rabbitmq.client.ConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,14 +28,15 @@ import java.io.Serializable;
 import java.net.URISyntaxException;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
+import java.util.Optional;
 
 /**
  * Connection Configuration for RMQ.
  * If {@link Builder#setUri(String)} has been set then {@link RMQConnectionConfig#RMQConnectionConfig(String, Integer,
- * Boolean, Boolean, Integer, Integer, Integer, Integer)}
+ * Boolean, Boolean, Integer, Integer, Integer, Integer, Integer)}
  * will be used for initialize the RMQ connection or
  * {@link RMQConnectionConfig#RMQConnectionConfig(String, Integer, String, String, String, Integer, Boolean,
- * Boolean, Integer, Integer, Integer, Integer)}
+ * Boolean, Integer, Integer, Integer, Integer, Integer)}
  * will be used for initialize the RMQ connection
  */
 public class RMQConnectionConfig implements Serializable {
@@ -58,6 +61,8 @@ public class RMQConnectionConfig implements Serializable {
 	private Integer requestedFrameMax;
 	private Integer requestedHeartbeat;
 
+	private Integer prefetchCount;
+
 	/**
 	*
 	* @param host host name
@@ -77,7 +82,8 @@ public class RMQConnectionConfig implements Serializable {
 	private RMQConnectionConfig(String host, Integer port, String virtualHost, String username, String password,
 								Integer networkRecoveryInterval, Boolean automaticRecovery,
 								Boolean topologyRecovery, Integer connectionTimeout, Integer requestedChannelMax,
-								Integer requestedFrameMax, Integer requestedHeartbeat){
+								Integer requestedFrameMax, Integer requestedHeartbeat,
+								Integer prefetchCount){
 		Preconditions.checkNotNull(host, "host can not be null");
 		Preconditions.checkNotNull(port, "port can not be null");
 		Preconditions.checkNotNull(virtualHost, "virtualHost can not be null");
@@ -96,6 +102,7 @@ public class RMQConnectionConfig implements Serializable {
 		this.requestedChannelMax = requestedChannelMax;
 		this.requestedFrameMax = requestedFrameMax;
 		this.requestedHeartbeat = requestedHeartbeat;
+		this.prefetchCount = prefetchCount;
 	}
 
 	/**
@@ -112,7 +119,7 @@ public class RMQConnectionConfig implements Serializable {
 	*/
 	private RMQConnectionConfig(String uri, Integer networkRecoveryInterval, Boolean automaticRecovery,
 								Boolean topologyRecovery, Integer connectionTimeout, Integer requestedChannelMax,
-								Integer requestedFrameMax, Integer requestedHeartbeat){
+								Integer requestedFrameMax, Integer requestedHeartbeat, Integer prefetchCount){
 		Preconditions.checkNotNull(uri, "Uri can not be null");
 		this.uri = uri;
 
@@ -123,6 +130,7 @@ public class RMQConnectionConfig implements Serializable {
 		this.requestedChannelMax = requestedChannelMax;
 		this.requestedFrameMax = requestedFrameMax;
 		this.requestedHeartbeat = requestedHeartbeat;
+		this.prefetchCount = prefetchCount;
 	}
 
 	/** @return the host to use for connections */
@@ -176,7 +184,7 @@ public class RMQConnectionConfig implements Serializable {
 	}
 
 	/**
-	 * Returns true if automatic connection recovery is enabled, false otherwise
+	 * Returns true if automatic connection recovery is enabled, false otherwise.
 	 * @return true if automatic connection recovery is enabled, false otherwise
 	 */
 	public Boolean isAutomaticRecovery() {
@@ -184,7 +192,7 @@ public class RMQConnectionConfig implements Serializable {
 	}
 
 	/**
-	 * Returns true if topology recovery is enabled, false otherwise
+	 * Returns true if topology recovery is enabled, false otherwise.
 	 * @return true if topology recovery is enabled, false otherwise
 	 */
 	public Boolean isTopologyRecovery() {
@@ -200,7 +208,7 @@ public class RMQConnectionConfig implements Serializable {
 	}
 
 	/**
-	 * Retrieve the requested maximum channel number
+	 * Retrieve the requested maximum channel number.
 	 * @return the initially requested maximum channel number; zero for unlimited
 	 */
 	public Integer getRequestedChannelMax() {
@@ -208,7 +216,7 @@ public class RMQConnectionConfig implements Serializable {
 	}
 
 	/**
-	 * Retrieve the requested maximum frame size
+	 * Retrieve the requested maximum frame size.
 	 * @return the initially requested maximum frame size, in octets; zero for unlimited
 	 */
 	public Integer getRequestedFrameMax() {
@@ -224,9 +232,19 @@ public class RMQConnectionConfig implements Serializable {
 	}
 
 	/**
+	 * Retrieve the the channel prefetch count.
+	 * @return an Optional of the prefetch count, if set, for the consumer channel
+	 */
+	public Optional<Integer> getPrefetchCount() {
+		return Optional.ofNullable(prefetchCount);
+	}
+
+	/**
 	 *
 	 * @return Connection Factory for RMQ
-	 * @throws URISyntaxException, NoSuchAlgorithmException, KeyManagementException if Malformed URI has been passed
+	 * @throws URISyntaxException if Malformed URI has been passed
+	 * @throws NoSuchAlgorithmException if the ssl factory could not be created
+	 * @throws KeyManagementException if the ssl context could not be initialized
 	 */
 	public ConnectionFactory getConnectionFactory() throws URISyntaxException,
 		NoSuchAlgorithmException, KeyManagementException {
@@ -234,8 +252,16 @@ public class RMQConnectionConfig implements Serializable {
 		if (this.uri != null && !this.uri.isEmpty()){
 			try {
 				factory.setUri(this.uri);
-			} catch (URISyntaxException | NoSuchAlgorithmException | KeyManagementException e) {
+			} catch (URISyntaxException e) {
 				LOG.error("Failed to parse uri", e);
+				throw e;
+			} catch (KeyManagementException e) {
+				// this should never happen
+				LOG.error("Failed to initialize ssl context.", e);
+				throw e;
+			} catch (NoSuchAlgorithmException e) {
+				// this should never happen
+				LOG.error("Failed to setup ssl factory.", e);
 				throw e;
 			}
 		} else {
@@ -272,7 +298,7 @@ public class RMQConnectionConfig implements Serializable {
 	}
 
 	/**
-	 * The Builder Class for {@link RMQConnectionConfig}
+	 * The Builder Class for {@link RMQConnectionConfig}.
 	 */
 	public static class Builder {
 
@@ -290,6 +316,9 @@ public class RMQConnectionConfig implements Serializable {
 		private Integer requestedChannelMax;
 		private Integer requestedFrameMax;
 		private Integer requestedHeartbeat;
+
+		// basicQos options for consumers
+		private Integer prefetchCount;
 
 		private String uri;
 
@@ -344,7 +373,7 @@ public class RMQConnectionConfig implements Serializable {
 		/**
 		 * Convenience method for setting the fields in an AMQP URI: host,
 		 * port, username, password and virtual host.  If any part of the
-		 * URI is ommited, the ConnectionFactory's corresponding variable
+		 * URI is omitted, the ConnectionFactory's corresponding variable
 		 * is left unchanged.
 		 * @param uri is the AMQP URI containing the data
 		 * @return the Builder
@@ -355,7 +384,7 @@ public class RMQConnectionConfig implements Serializable {
 		}
 
 		/**
-		 * Enables or disables topology recovery
+		 * Enables or disables topology recovery.
 		 * @param topologyRecovery if true, enables topology recovery
 		 * @return the Builder
 		 */
@@ -375,7 +404,7 @@ public class RMQConnectionConfig implements Serializable {
 		}
 
 		/**
-		 * Set the requested maximum frame size
+		 * Set the requested maximum frame size.
 		 * @param requestedFrameMax initially requested maximum frame size, in octets; zero for unlimited
 		 * @return the Builder
 		 */
@@ -385,7 +414,7 @@ public class RMQConnectionConfig implements Serializable {
 		}
 
 		/**
-		 * Set the requested maximum channel number
+		 * Set the requested maximum channel number.
 		 * @param requestedChannelMax initially requested maximum channel number; zero for unlimited
 		 */
 		public Builder setRequestedChannelMax(int requestedChannelMax) {
@@ -414,7 +443,7 @@ public class RMQConnectionConfig implements Serializable {
 		}
 
 		/**
-		 * Enables or disables automatic connection recovery
+		 * Enables or disables automatic connection recovery.
 		 * @param automaticRecovery if true, enables connection recovery
 		 * @return the Builder
 		 */
@@ -424,24 +453,40 @@ public class RMQConnectionConfig implements Serializable {
 		}
 
 		/**
-		 * The Builder method
-		 * If URI is NULL we use host, port, vHost, username, password combination
-		 * to initialize connection. using  {@link RMQConnectionConfig#RMQConnectionConfig(String, Integer, String, String, String,
-		 * Integer, Boolean, Boolean, Integer, Integer, Integer, Integer)}
+		 * Enables setting basicQos for the consumer channel. Only applicable to the {@link RMQSource}. Set to 0
+		 * for unlimited, which is the default.
 		 *
-		 * else URI will be used to initialize the client connection
-		 * {@link RMQConnectionConfig#RMQConnectionConfig(String, Integer, Boolean, Boolean, Integer, Integer, Integer, Integer)}
+		 * @see <a href="https://www.rabbitmq.com/consumer-prefetch.html">Consumer Prefetch</a>
+		 * @see <a href="https://www.rabbitmq.com/confirms.html#channel-qos-prefetch">Channel Prefetch (QoS)</a>
+		 * @param prefetchCount the max number of messages to receive without acknowledgement.
+		 * @return the Builder
+		 */
+		public Builder setPrefetchCount(int prefetchCount) {
+			this.prefetchCount = prefetchCount;
+			return this;
+		}
+
+		/**
+		 * The Builder method.
+		 *
+		 * <p>If URI is NULL we use host, port, vHost, username, password combination
+		 * to initialize connection. using  {@link RMQConnectionConfig#RMQConnectionConfig(String, Integer, String, String, String,
+		 * Integer, Boolean, Boolean, Integer, Integer, Integer, Integer, Integer)}.
+		 *
+		 * <p>Otherwise the URI will be used to initialize the client connection
+		 * {@link RMQConnectionConfig#RMQConnectionConfig(String, Integer, Boolean, Boolean, Integer, Integer, Integer, Integer, Integer)}
 		 * @return RMQConnectionConfig
 		 */
 		public RMQConnectionConfig build(){
-			if(this.uri != null) {
+			if (this.uri != null) {
 				return new RMQConnectionConfig(this.uri, this.networkRecoveryInterval,
 					this.automaticRecovery, this.topologyRecovery, this.connectionTimeout, this.requestedChannelMax,
-					this.requestedFrameMax, this.requestedHeartbeat);
+					this.requestedFrameMax, this.requestedHeartbeat, this.prefetchCount);
 			} else {
 				return new RMQConnectionConfig(this.host, this.port, this.virtualHost, this.username, this.password,
 					this.networkRecoveryInterval, this.automaticRecovery, this.topologyRecovery,
-					this.connectionTimeout, this.requestedChannelMax, this.requestedFrameMax, this.requestedHeartbeat);
+					this.connectionTimeout, this.requestedChannelMax, this.requestedFrameMax, this.requestedHeartbeat,
+					this.prefetchCount);
 			}
 		}
 	}

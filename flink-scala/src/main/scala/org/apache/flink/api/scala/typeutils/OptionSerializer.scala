@@ -25,6 +25,7 @@ import org.apache.flink.core.memory.{DataInputView, DataOutputView}
  * Serializer for [[Option]].
  */
 @Internal
+@SerialVersionUID(-8635243274072627338L)
 class OptionSerializer[A](val elemSerializer: TypeSerializer[A])
   extends TypeSerializer[Option[A]] {
 
@@ -83,13 +84,9 @@ class OptionSerializer[A](val elemSerializer: TypeSerializer[A])
   override def equals(obj: Any): Boolean = {
     obj match {
       case optionSerializer: OptionSerializer[_] =>
-        optionSerializer.canEqual(this) && elemSerializer.equals(optionSerializer.elemSerializer)
+        elemSerializer.equals(optionSerializer.elemSerializer)
       case _ => false
     }
-  }
-
-  override def canEqual(obj: scala.Any): Boolean = {
-    obj.isInstanceOf[OptionSerializer[_]]
   }
 
   override def hashCode(): Int = {
@@ -100,48 +97,31 @@ class OptionSerializer[A](val elemSerializer: TypeSerializer[A])
   // Serializer configuration snapshotting & compatibility
   // --------------------------------------------------------------------------------------------
 
-  override def snapshotConfiguration(): OptionSerializer.OptionSerializerConfigSnapshot[A] = {
-    new OptionSerializer.OptionSerializerConfigSnapshot(elemSerializer)
-  }
-
-  override def ensureCompatibility(
-      configSnapshot: TypeSerializerConfigSnapshot): CompatibilityResult[Option[A]] = {
-    configSnapshot match {
-      case optionSerializerConfigSnapshot
-          : OptionSerializer.OptionSerializerConfigSnapshot[A] =>
-        val compatResult = CompatibilityUtil.resolveCompatibilityResult(
-          optionSerializerConfigSnapshot.getSingleNestedSerializerAndConfig.f0,
-          classOf[UnloadableDummyTypeSerializer[_]],
-          optionSerializerConfigSnapshot.getSingleNestedSerializerAndConfig.f1,
-          elemSerializer)
-
-        if (compatResult.isRequiresMigration) {
-          if (compatResult.getConvertDeserializer != null) {
-            CompatibilityResult.requiresMigration(
-              new OptionSerializer[A](
-                new TypeDeserializerAdapter(compatResult.getConvertDeserializer)))
-          } else {
-            CompatibilityResult.requiresMigration()
-          }
-        } else {
-          CompatibilityResult.compatible()
-        }
-
-      case _ => CompatibilityResult.requiresMigration()
-    }
+  override def snapshotConfiguration(): TypeSerializerSnapshot[Option[A]] = {
+    new ScalaOptionSerializerSnapshot[A](this)
   }
 }
 
 object OptionSerializer {
 
-  class OptionSerializerConfigSnapshot[A](
-      private val elemSerializer: TypeSerializer[A])
-    extends CompositeTypeSerializerConfigSnapshot(elemSerializer) {
-
-    /** This empty nullary constructor is required for deserializing the configuration. */
-    def this() = this(null)
+  /**
+    * We need to keep this to be compatible with snapshots taken in Flink 1.3.0.
+    * Once Flink 1.3.x is no longer supported, this can be removed.
+    */
+  class OptionSerializerConfigSnapshot[A]()
+      extends CompositeTypeSerializerConfigSnapshot[Option[A]] {
 
     override def getVersion: Int = OptionSerializerConfigSnapshot.VERSION
+
+    override def resolveSchemaCompatibility(
+        newSerializer: TypeSerializer[Option[A]]
+    ): TypeSerializerSchemaCompatibility[Option[A]] = {
+      CompositeTypeSerializerUtil.delegateCompatibilityCheckToNewSnapshot(
+        newSerializer,
+        new ScalaOptionSerializerSnapshot[A](),
+        getSingleNestedSerializerAndConfig.f1
+      )
+    }
   }
 
   object OptionSerializerConfigSnapshot {

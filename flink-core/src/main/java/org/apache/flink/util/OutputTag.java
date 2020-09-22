@@ -15,17 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.flink.util;
 
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.Serializable;
+package org.apache.flink.util;
 
 import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.functions.InvalidTypesException;
-import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.java.typeutils.TypeExtractor;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
+import java.io.Serializable;
+import java.util.Objects;
 
 /**
  * An {@link OutputTag} is a typed and named tag to use for tagging side outputs
@@ -36,7 +38,7 @@ import org.apache.flink.api.common.typeinfo.TypeInformation;
  *
  * <p>Example:
  * <pre>{@code
- * OutputTag<Tuple2<String, Long>> info = new OutputTag<Tuple2<String, Long>>("late-data"){});
+ * OutputTag<Tuple2<String, Long>> info = new OutputTag<Tuple2<String, Long>>("late-data"){};
  * }</pre>
  *
  * @param <T> the type of elements in the side-output stream.
@@ -44,11 +46,11 @@ import org.apache.flink.api.common.typeinfo.TypeInformation;
 @PublicEvolving
 public class OutputTag<T> implements Serializable {
 
-	private static final long serialVersionUID = 1L;
+	private static final long serialVersionUID = 2L;
 
 	private final String id;
 
-	private transient TypeInformation<T> typeInfo;
+	private final TypeInformation<T> typeInfo;
 
 	/**
 	 * Creates a new named {@code OutputTag} with the given id.
@@ -61,11 +63,12 @@ public class OutputTag<T> implements Serializable {
 		this.id = id;
 
 		try {
-			TypeHint<T> typeHint = new TypeHint<T>(OutputTag.class, this, 0) {};
-			this.typeInfo = typeHint.getTypeInfo();
-		} catch (InvalidTypesException e) {
-			throw new InvalidTypesException("Could not determine TypeInformation for generic " +
-					"OutputTag type. Did you forget to make your OutputTag an anonymous inner class?", e);
+			this.typeInfo = TypeExtractor.createTypeInfo(this, OutputTag.class, getClass(), 0);
+		}
+		catch (InvalidTypesException e) {
+			throw new InvalidTypesException("Could not determine TypeInformation for the OutputTag type. " +
+					"The most common reason is forgetting to make the OutputTag an anonymous inner class. " +
+					"It is also not possible to use generic type variables with OutputTags, such as 'Tuple2<A, B>'.", e);
 		}
 	}
 
@@ -82,10 +85,11 @@ public class OutputTag<T> implements Serializable {
 		this.typeInfo = Preconditions.checkNotNull(typeInfo, "TypeInformation cannot be null.");
 	}
 
-	private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
-		in.defaultReadObject();
-		typeInfo = null;
+	public static boolean isResponsibleFor(@Nullable OutputTag<?> owner, @Nonnull OutputTag<?> other) {
+		return other.equals(owner);
 	}
+
+	// ------------------------------------------------------------------------
 
 	public String getId() {
 		return id;
@@ -95,10 +99,18 @@ public class OutputTag<T> implements Serializable {
 		return typeInfo;
 	}
 
+	// ------------------------------------------------------------------------
+
 	@Override
 	public boolean equals(Object obj) {
-		return obj instanceof OutputTag
-			&& ((OutputTag) obj).id.equals(this.id);
+		if (obj == this) {
+			return true;
+		}
+		if (obj == null || !(obj instanceof OutputTag)) {
+			return false;
+		}
+		OutputTag other = (OutputTag) obj;
+		return Objects.equals(this.id, other.id);
 	}
 
 	@Override

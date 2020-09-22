@@ -18,14 +18,19 @@
 
 package org.apache.flink.runtime.io.network.netty;
 
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.SimpleChannelInboundHandler;
-import org.apache.flink.runtime.io.network.TaskEventDispatcher;
+import org.apache.flink.runtime.io.network.NetworkSequenceViewReader;
+import org.apache.flink.runtime.io.network.TaskEventPublisher;
+import org.apache.flink.runtime.io.network.netty.NettyMessage.AddCredit;
 import org.apache.flink.runtime.io.network.netty.NettyMessage.CancelPartitionRequest;
 import org.apache.flink.runtime.io.network.netty.NettyMessage.CloseRequest;
+import org.apache.flink.runtime.io.network.netty.NettyMessage.ResumeConsumption;
 import org.apache.flink.runtime.io.network.partition.PartitionNotFoundException;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionProvider;
 import org.apache.flink.runtime.io.network.partition.consumer.InputChannelID;
+
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.flink.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,17 +46,17 @@ class PartitionRequestServerHandler extends SimpleChannelInboundHandler<NettyMes
 
 	private final ResultPartitionProvider partitionProvider;
 
-	private final TaskEventDispatcher taskEventDispatcher;
+	private final TaskEventPublisher taskEventPublisher;
 
 	private final PartitionRequestQueue outboundQueue;
 
 	PartitionRequestServerHandler(
 		ResultPartitionProvider partitionProvider,
-		TaskEventDispatcher taskEventDispatcher,
+		TaskEventPublisher taskEventPublisher,
 		PartitionRequestQueue outboundQueue) {
 
 		this.partitionProvider = partitionProvider;
-		this.taskEventDispatcher = taskEventDispatcher;
+		this.taskEventPublisher = taskEventPublisher;
 		this.outboundQueue = outboundQueue;
 	}
 
@@ -79,14 +84,18 @@ class PartitionRequestServerHandler extends SimpleChannelInboundHandler<NettyMes
 				LOG.debug("Read channel on {}: {}.", ctx.channel().localAddress(), request);
 
 				try {
-					SequenceNumberingViewReader reader = new SequenceNumberingViewReader(
+					NetworkSequenceViewReader reader;
+					reader = new CreditBasedSequenceNumberingViewReader(
 						request.receiverId,
+						request.credit,
 						outboundQueue);
 
 					reader.requestSubpartitionView(
 						partitionProvider,
 						request.partitionId,
 						request.queueIndex);
+
+					outboundQueue.notifyReaderCreated(reader);
 				} catch (PartitionNotFoundException notFound) {
 					respondWithError(ctx, notFound, request.receiverId);
 				}
@@ -97,7 +106,7 @@ class PartitionRequestServerHandler extends SimpleChannelInboundHandler<NettyMes
 			else if (msgClazz == TaskEventRequest.class) {
 				TaskEventRequest request = (TaskEventRequest) msg;
 
-				if (!taskEventDispatcher.publish(request.partitionId, request.event)) {
+				if (!taskEventPublisher.publish(request.partitionId, request.event)) {
 					respondWithError(ctx, new IllegalArgumentException("Task event receiver not found."), request.receiverId);
 				}
 			} else if (msgClazz == CancelPartitionRequest.class) {
@@ -106,6 +115,14 @@ class PartitionRequestServerHandler extends SimpleChannelInboundHandler<NettyMes
 				outboundQueue.cancel(request.receiverId);
 			} else if (msgClazz == CloseRequest.class) {
 				outboundQueue.close();
+			} else if (msgClazz == AddCredit.class) {
+				AddCredit request = (AddCredit) msg;
+
+				outboundQueue.addCreditOrResumeConsumption(request.receiverId, reader -> reader.addCredit(request.credit));
+			} else if (msgClazz == ResumeConsumption.class) {
+				ResumeConsumption request = (ResumeConsumption) msg;
+
+				outboundQueue.addCreditOrResumeConsumption(request.receiverId, NetworkSequenceViewReader::resumeConsumption);
 			} else {
 				LOG.warn("Received unexpected client request: {}", msg);
 			}

@@ -40,7 +40,7 @@ import java.io.IOException;
  * The following environment variables are set in the container:
  *  - HADOOP_CONF_DIR
  *
- * The folloowing Flink configuration entries are updated:
+ * The following Flink configuration entries are updated:
  *  - fs.hdfs.hadoopconf
  */
 public class HadoopConfOverlay implements ContainerOverlay {
@@ -69,7 +69,7 @@ public class HadoopConfOverlay implements ContainerOverlay {
 		File hdfsSitePath = new File(hadoopConfDir, "hdfs-site.xml");
 
 		container.getEnvironmentVariables().put("HADOOP_CONF_DIR", TARGET_CONF_DIR.toString());
-		container.getDynamicConfiguration().setString(ConfigConstants.PATH_HADOOP_CONFIG, TARGET_CONF_DIR.toString());
+		container.getFlinkConfiguration().setString(ConfigConstants.PATH_HADOOP_CONFIG, TARGET_CONF_DIR.toString());
 
 		container.getArtifacts().add(ContainerSpecification.Artifact
 			.newBuilder()

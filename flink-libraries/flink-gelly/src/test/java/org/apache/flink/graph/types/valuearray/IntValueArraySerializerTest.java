@@ -18,7 +18,6 @@
 
 package org.apache.flink.graph.types.valuearray;
 
-import org.apache.flink.api.common.typeutils.SerializerTestBase;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.types.IntValue;
 
@@ -27,7 +26,7 @@ import java.util.Random;
 /**
  * A test for the {@link IntValueArraySerializer}.
  */
-public class IntValueArraySerializerTest extends SerializerTestBase<IntValueArray> {
+public class IntValueArraySerializerTest extends ValueArraySerializerTestBase<IntValueArray> {
 
 	@Override
 	protected TypeSerializer<IntValueArray> createSerializer() {
@@ -83,7 +82,7 @@ public class IntValueArraySerializerTest extends SerializerTestBase<IntValueArra
 
 		IntValueArray iva8 = new IntValueArray();
 		iva8.addAll(iva7);
-		for (int i = 0 ; i < 1.5 * defaultElements ; i++) {
+		for (int i = 0; i < 1.5 * defaultElements; i++) {
 			iva8.add(new IntValue(i));
 		}
 		iva8.addAll(iva8);

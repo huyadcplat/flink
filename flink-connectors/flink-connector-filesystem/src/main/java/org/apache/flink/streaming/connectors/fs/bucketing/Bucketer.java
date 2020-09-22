@@ -15,9 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.streaming.connectors.fs.bucketing;
 
 import org.apache.flink.streaming.connectors.fs.Clock;
+
 import org.apache.hadoop.fs.Path;
 
 import java.io.Serializable;
@@ -26,16 +28,18 @@ import java.io.Serializable;
  * A bucketer is used with a {@link BucketingSink}
  * to put emitted elements into rolling files.
  *
- * <p>
- * The {@code BucketingSink} can be writing to many buckets at a time, and it is responsible for managing
+ *
+ * <p>The {@code BucketingSink} can be writing to many buckets at a time, and it is responsible for managing
  * a set of active buckets. Whenever a new element arrives it will ask the {@code Bucketer} for the bucket
  * path the element should fall in. The {@code Bucketer} can, for example, determine buckets based on
  * system time.
  */
+@Deprecated
 public interface Bucketer<T> extends Serializable {
 	/**
 	 * Returns the {@link Path} of a bucket file.
 	 *
+	 * @param clock The current system time in milliseconds.
 	 * @param basePath The base path containing all the buckets.
 	 * @param element The current element being processed.
 	 *

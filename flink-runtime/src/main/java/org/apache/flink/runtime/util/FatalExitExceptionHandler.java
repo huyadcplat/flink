@@ -34,9 +34,13 @@ public final class FatalExitExceptionHandler implements Thread.UncaughtException
 	public static final FatalExitExceptionHandler INSTANCE = new FatalExitExceptionHandler();
 
 	@Override
+	@SuppressWarnings("finally")
 	public void uncaughtException(Thread t, Throwable e) {
-		LOG.error("FATAL: Thread '" + t.getName() +
-			"' produced an uncaught exception. Stopping the process...", e);
-		System.exit(-17);
+		try {
+			LOG.error("FATAL: Thread '{}' produced an uncaught exception. Stopping the process...", t.getName(), e);
+		}
+		finally {
+			System.exit(-17);
+		}
 	}
 }

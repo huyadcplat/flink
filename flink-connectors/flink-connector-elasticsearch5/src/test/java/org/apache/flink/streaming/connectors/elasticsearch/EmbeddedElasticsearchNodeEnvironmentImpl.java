@@ -19,11 +19,12 @@
 package org.apache.flink.streaming.connectors.elasticsearch;
 
 import org.apache.flink.streaming.connectors.elasticsearch5.ElasticsearchSinkITCase;
+
 import org.elasticsearch.client.Client;
 import org.elasticsearch.common.network.NetworkModule;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.node.InternalSettingsPreparer;
 import org.elasticsearch.node.Node;
-import org.elasticsearch.node.internal.InternalSettingsPreparer;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.transport.Netty3Plugin;
 

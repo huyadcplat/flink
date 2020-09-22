@@ -15,13 +15,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.test.state.operator.restore.unkeyed;
 
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 import org.apache.flink.streaming.api.CheckpointingMode;
@@ -31,15 +32,17 @@ import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunction;
 import org.apache.flink.test.state.operator.restore.ExecutionMode;
+
 import org.junit.Assert;
 
 import java.util.Arrays;
 import java.util.List;
 
 /**
- * Savepoint generator to create the job used by the {@link AbstractNonKeyedOperatorRestoreTestBase}.
+ * Savepoint generator to create the savepoint used by the {@link AbstractNonKeyedOperatorRestoreTestBase}.
+ * Switch to specific version branches and run this job to create savepoints of different Flink versions.
  *
- * The job should be cancelled manually through the REST API using the cancel-with-savepoint operation.
+ * <p>The job should be cancelled manually through the REST API using the cancel-with-savepoint operation.
  */
 public class NonKeyedJob {
 
@@ -49,7 +52,7 @@ public class NonKeyedJob {
 		String savepointsPath = pt.getRequired("savepoint-path");
 
 		Configuration config = new Configuration();
-		config.setString(ConfigConstants.SAVEPOINT_DIRECTORY_KEY, savepointsPath);
+		config.setString(CheckpointingOptions.SAVEPOINT_DIRECTORY, savepointsPath);
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(config);
 		env.enableCheckpointing(500, CheckpointingMode.EXACTLY_ONCE);
@@ -97,12 +100,8 @@ public class NonKeyedJob {
 	public static SingleOutputStreamOperator<Integer> createThirdStatefulMap(ExecutionMode mode, DataStream<Integer> input) {
 		SingleOutputStreamOperator<Integer> map = input
 			.map(new StatefulStringStoringMap(mode, "third"))
-			.setParallelism(4);
-
-		// we cannot set the uid on a chained operator in 1.2
-		if (mode == ExecutionMode.MIGRATE || mode == ExecutionMode.RESTORE) {
-			map.uid("third");
-		}
+			.setParallelism(4)
+			.uid("third");
 
 		return map;
 	}
@@ -191,8 +190,5 @@ public class NonKeyedJob {
 				this.notifyAll();
 			}
 		}
-	}
-
-	private NonKeyedJob() {
 	}
 }

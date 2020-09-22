@@ -15,11 +15,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.runtime.webmonitor.history;
 
 import org.junit.Assert;
 import org.junit.Test;
 
+/**
+ * Tests for the {@link ArchivedJson}.
+ */
 public class ArchivedJsonTest {
 
 	@Test
@@ -33,5 +37,15 @@ public class ArchivedJsonTest {
 		Assert.assertEquals(original, twin);
 		Assert.assertNotEquals(original, identicalPath);
 		Assert.assertNotEquals(original, identicalJson);
+	}
+
+	@Test
+	public void testHashCode() {
+		ArchivedJson original = new ArchivedJson("path", "json");
+		ArchivedJson twin = new ArchivedJson("path", "json");
+
+		Assert.assertEquals(original, original);
+		Assert.assertEquals(original, twin);
+		Assert.assertEquals(original.hashCode(), twin.hashCode());
 	}
 }

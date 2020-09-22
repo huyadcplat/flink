@@ -20,18 +20,18 @@ package org.apache.flink.streaming.api.functions.async;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.accumulators.Accumulator;
+import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.common.functions.BroadcastVariableInitializer;
-import org.apache.flink.api.common.functions.FoldFunction;
 import org.apache.flink.api.common.functions.IterationRuntimeContext;
 import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.common.functions.RuntimeContext;
-import org.apache.flink.api.common.state.FoldingStateDescriptor;
+import org.apache.flink.api.common.state.AggregatingStateDescriptor;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.api.common.state.ReducingStateDescriptor;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.metrics.MetricGroup;
-import org.apache.flink.streaming.api.functions.async.collector.AsyncCollector;
+import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 
 import org.junit.Test;
 
@@ -55,7 +55,7 @@ public class RichAsyncFunctionTest {
 			private static final long serialVersionUID = -2023923961609455894L;
 
 			@Override
-			public void asyncInvoke(Integer input, AsyncCollector<Integer> collector) throws Exception {
+			public void asyncInvoke(Integer input, ResultFuture<Integer> resultFuture) throws Exception {
 				// no op
 			}
 		};
@@ -94,13 +94,13 @@ public class RichAsyncFunctionTest {
 			private static final long serialVersionUID = 1707630162838967972L;
 
 			@Override
-			public void asyncInvoke(Integer input, AsyncCollector<Integer> collector) throws Exception {
+			public void asyncInvoke(Integer input, ResultFuture<Integer> resultFuture) throws Exception {
 				// no op
 			}
 		};
 
 		final String taskName = "foobarTask";
-		final MetricGroup metricGroup = mock(MetricGroup.class);
+		final MetricGroup metricGroup = new UnregisteredMetricsGroup();
 		final int numberOfParallelSubtasks = 42;
 		final int indexOfSubtask = 43;
 		final int attemptNumber = 1337;
@@ -166,11 +166,28 @@ public class RichAsyncFunctionTest {
 		} catch (UnsupportedOperationException e) {
 			// expected
 		}
+
 		try {
-			runtimeContext.getFoldingState(new FoldingStateDescriptor<>("foobar", 0, new FoldFunction<Integer, Integer>() {
+			runtimeContext.getAggregatingState(new AggregatingStateDescriptor<>("foobar", new AggregateFunction<Integer, Integer, Integer>() {
+
 				@Override
-				public Integer fold(Integer accumulator, Integer value) throws Exception {
-					return accumulator;
+				public Integer createAccumulator() {
+					return null;
+				}
+
+				@Override
+				public Integer add(Integer value, Integer accumulator) {
+					return null;
+				}
+
+				@Override
+				public Integer getResult(Integer accumulator) {
+					return null;
+				}
+
+				@Override
+				public Integer merge(Integer a, Integer b) {
+					return null;
 				}
 			}, Integer.class));
 		} catch (UnsupportedOperationException e) {
@@ -220,13 +237,6 @@ public class RichAsyncFunctionTest {
 		try {
 			runtimeContext.getAccumulator("foobar");
 			fail("Expected getAccumulator to fail with unsupported operation exception.");
-		} catch (UnsupportedOperationException e) {
-			// expected
-		}
-
-		try {
-			runtimeContext.getAllAccumulators();
-			fail("Expected getAllAccumulators to fail with unsupported operation exception.");
 		} catch (UnsupportedOperationException e) {
 			// expected
 		}

@@ -47,7 +47,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  *
  * <p>Field expressions that specify nested fields (e.g. "f1.a.foo") result in nested field
  * accessors. These penetrate one layer, and then delegate the rest of the work to an
- * "innerAccesor". (see PojoFieldAccessor, RecursiveTupleFieldAccessor,
+ * "innerAccessor". (see PojoFieldAccessor, RecursiveTupleFieldAccessor,
  * RecursiveProductFieldAccessor)
  */
 @Internal
@@ -204,10 +204,6 @@ public abstract class FieldAccessor<T, F> implements Serializable {
 						typeInfo.toString() + "\", which is an invalid index.");
 			}
 
-			if (pos < 0) {
-				throw new CompositeType.InvalidFieldReferenceException("Tried to select " + ((Integer) pos).toString() + ". field.");
-			}
-
 			this.pos = pos;
 			this.innerAccessor = innerAccessor;
 			this.fieldType = innerAccessor.fieldType;
@@ -356,11 +352,11 @@ public abstract class FieldAccessor<T, F> implements Serializable {
 			checkNotNull(innerAccessor, "innerAccessor must not be null.");
 
 			this.pos = pos;
-			this.fieldType = ((TupleTypeInfoBase<T>) typeInfo).getTypeAt(pos);
 			this.serializer = (TupleSerializerBase<T>) typeInfo.createSerializer(config);
 			this.length = this.serializer.getArity();
 			this.fields = new Object[this.length];
 			this.innerAccessor = innerAccessor;
+			this.fieldType = innerAccessor.getFieldType();
 		}
 
 		@SuppressWarnings("unchecked")

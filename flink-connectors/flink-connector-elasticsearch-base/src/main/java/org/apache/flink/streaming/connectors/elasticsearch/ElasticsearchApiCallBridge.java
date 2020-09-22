@@ -18,32 +18,48 @@
 
 package org.apache.flink.streaming.connectors.elasticsearch;
 
+import org.apache.flink.annotation.Internal;
+
 import org.elasticsearch.action.bulk.BulkItemResponse;
 import org.elasticsearch.action.bulk.BulkProcessor;
-import org.elasticsearch.client.Client;
 
 import javax.annotation.Nullable;
+
+import java.io.IOException;
 import java.io.Serializable;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * An {@link ElasticsearchApiCallBridge} is used to bridge incompatible Elasticsearch Java API calls across different versions.
  * This includes calls to create Elasticsearch clients, handle failed item responses, etc. Any incompatible Elasticsearch
  * Java APIs should be bridged using this interface.
  *
- * Implementations are allowed to be stateful. For example, for Elasticsearch 1.x, since connecting via an embedded node
+ * <p>Implementations are allowed to be stateful. For example, for Elasticsearch 1.x, since connecting via an embedded node
  * is allowed, the call bridge will hold reference to the created embedded node. Each instance of the sink will hold
  * exactly one instance of the call bridge, and state cleanup is performed when the sink is closed.
+ *
+ * @param <C> The Elasticsearch client, that implements {@link AutoCloseable}.
  */
-public interface ElasticsearchApiCallBridge extends Serializable {
+@Internal
+public interface ElasticsearchApiCallBridge<C extends AutoCloseable> extends Serializable {
 
 	/**
-	 * Creates an Elasticsearch {@link Client}.
+	 * Creates an Elasticsearch client implementing {@link AutoCloseable}.
 	 *
 	 * @param clientConfig The configuration to use when constructing the client.
 	 * @return The created client.
 	 */
-	Client createClient(Map<String, String> clientConfig);
+	C createClient(Map<String, String> clientConfig);
+
+	/**
+	 * Creates a {@link BulkProcessor.Builder} for creating the bulk processor.
+	 *
+	 * @param client the Elasticsearch client.
+	 * @param listener the bulk processor listener.
+	 * @return the bulk processor builder.
+	 */
+	BulkProcessor.Builder createBulkProcessorBuilder(C client, BulkProcessor.Listener listener);
 
 	/**
 	 * Extracts the cause of failure of a bulk item action.
@@ -65,8 +81,33 @@ public interface ElasticsearchApiCallBridge extends Serializable {
 		@Nullable ElasticsearchSinkBase.BulkFlushBackoffPolicy flushBackoffPolicy);
 
 	/**
+	 * Verify the client connection by making a test request/ping to the Elasticsearch cluster.
+	 *
+	 * <p>Called by {@link ElasticsearchSinkBase#open(org.apache.flink.configuration.Configuration)} after creating the client. This makes sure the underlying
+	 * client is closed if the connection is not successful and preventing thread leak.
+	 *
+	 * @param client the Elasticsearch client.
+	 */
+	void verifyClientConnection(C client) throws IOException;
+
+	/**
+	 * Creates a {@link RequestIndexer} that is able to work with {@link BulkProcessor} binary compatible.
+	 */
+	default RequestIndexer createBulkProcessorIndexer(
+			BulkProcessor bulkProcessor,
+			boolean flushOnCheckpoint,
+			AtomicLong numPendingRequestsRef) {
+		return new PreElasticsearch6BulkProcessorIndexer(
+			bulkProcessor,
+			flushOnCheckpoint,
+			numPendingRequestsRef);
+	}
+
+	/**
 	 * Perform any necessary state cleanup.
 	 */
-	void cleanup();
+	default void cleanup() {
+		// nothing to cleanup by default
+	}
 
 }

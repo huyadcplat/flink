@@ -20,12 +20,16 @@ package org.apache.flink.runtime.metrics.groups;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.metrics.CharacterFilter;
+import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
+import org.apache.flink.runtime.jobgraph.JobVertexID;
+import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.metrics.MetricRegistry;
 import org.apache.flink.runtime.metrics.dump.QueryScopeInfo;
 import org.apache.flink.runtime.metrics.scope.ScopeFormat;
 import org.apache.flink.util.AbstractID;
 
 import javax.annotation.Nullable;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -33,7 +37,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * Special {@link org.apache.flink.metrics.MetricGroup} representing a Flink runtime Task.
- * 
+ *
  * <p>Contains extra logic for adding operators.
  */
 @Internal
@@ -41,14 +45,16 @@ public class TaskMetricGroup extends ComponentMetricGroup<TaskManagerJobMetricGr
 
 	private final Map<String, OperatorMetricGroup> operators = new HashMap<>();
 
+	static final int METRICS_OPERATOR_NAME_MAX_LENGTH = 80;
+
 	private final TaskIOMetricGroup ioMetrics;
-	
-	/** The execution Id uniquely identifying the executed task represented by this metrics group */
-	private final AbstractID executionId;
+
+	/** The execution Id uniquely identifying the executed task represented by this metrics group. */
+	private final ExecutionAttemptID executionId;
 
 	@Nullable
-	protected final AbstractID vertexId;
-	
+	protected final JobVertexID vertexId;
+
 	@Nullable
 	private final String taskName;
 
@@ -61,8 +67,8 @@ public class TaskMetricGroup extends ComponentMetricGroup<TaskManagerJobMetricGr
 	public TaskMetricGroup(
 			MetricRegistry registry,
 			TaskManagerJobMetricGroup parent,
-			@Nullable AbstractID vertexId,
-			AbstractID executionId,
+			@Nullable JobVertexID vertexId,
+			ExecutionAttemptID executionId,
 			@Nullable String taskName,
 			int subtaskIndex,
 			int attemptNumber) {
@@ -86,7 +92,7 @@ public class TaskMetricGroup extends ComponentMetricGroup<TaskManagerJobMetricGr
 		return parent;
 	}
 
-	public AbstractID executionId() {
+	public ExecutionAttemptID executionId() {
 		return executionId;
 	}
 
@@ -121,7 +127,7 @@ public class TaskMetricGroup extends ComponentMetricGroup<TaskManagerJobMetricGr
 	protected QueryScopeInfo.TaskQueryScopeInfo createQueryServiceMetricInfo(CharacterFilter filter) {
 		return new QueryScopeInfo.TaskQueryScopeInfo(
 			this.parent.jobId.toString(),
-			this.vertexId.toString(),
+			String.valueOf(this.vertexId),
 			this.subtaskIndex);
 	}
 
@@ -129,19 +135,24 @@ public class TaskMetricGroup extends ComponentMetricGroup<TaskManagerJobMetricGr
 	//  operators and cleanup
 	// ------------------------------------------------------------------------
 
-	public OperatorMetricGroup addOperator(String name) {
-		OperatorMetricGroup operator = new OperatorMetricGroup(this.registry, this, name);
+	public OperatorMetricGroup getOrAddOperator(String name) {
+		return getOrAddOperator(OperatorID.fromJobVertexID(vertexId), name);
+	}
+
+	public OperatorMetricGroup getOrAddOperator(OperatorID operatorID, String name) {
+		final String metricName;
+		if (name != null && name.length() > METRICS_OPERATOR_NAME_MAX_LENGTH) {
+			LOG.warn("The operator name {} exceeded the {} characters length limit and was truncated.", name, METRICS_OPERATOR_NAME_MAX_LENGTH);
+			metricName = name.substring(0, METRICS_OPERATOR_NAME_MAX_LENGTH);
+		} else {
+			metricName = name;
+		}
+
+		// unique OperatorIDs only exist in streaming, so we have to rely on the name for batch operators
+		final String key = operatorID + metricName;
 
 		synchronized (this) {
-			OperatorMetricGroup previous = operators.put(name, operator);
-			if (previous == null) {
-				// no operator group so far
-				return operator;
-			} else {
-				// already had an operator group. restore that one.
-				operators.put(name, previous);
-				return previous;
-			}
+			return operators.computeIfAbsent(key, operator -> new OperatorMetricGroup(this.registry, this, operatorID, metricName));
 		}
 	}
 

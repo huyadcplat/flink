@@ -22,7 +22,6 @@ import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.typeutils.ResultTypeQueryable;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
-import org.apache.flink.graph.Edge;
 import org.apache.flink.graph.Graph;
 import org.apache.flink.graph.GraphAlgorithm;
 import org.apache.flink.graph.Vertex;
@@ -36,18 +35,18 @@ import org.apache.flink.types.NullValue;
 /**
  * A gather-sum-apply implementation of the Weakly Connected Components algorithm.
  *
- * This implementation uses a comparable vertex value as initial component
+ * <p>This implementation uses a comparable vertex value as initial component
  * identifier (ID). In the gather phase, each vertex collects the vertex value
  * of their adjacent vertices. In the sum phase, the minimum among those values
  * is selected. In the apply phase, the algorithm sets the minimum value as the
  * new vertex value if it is smaller than the current value.
  *
- * The algorithm converges when vertices no longer update their component ID
+ * <p>The algorithm converges when vertices no longer update their component ID
  * value or when the maximum number of iterations has been reached.
  *
- * The result is a DataSet of vertices, where the vertex value corresponds to
+ * <p>The result is a DataSet of vertices, where the vertex value corresponds to
  * the assigned component ID.
- * 
+ *
  * @see ConnectedComponents
  */
 public class GSAConnectedComponents<K, VV extends Comparable<VV>, EV>
@@ -60,7 +59,7 @@ public class GSAConnectedComponents<K, VV extends Comparable<VV>, EV>
 	 * The algorithm computes weakly connected components
 	 * and converges when no vertex updates its component ID
 	 * or when the maximum number of iterations has been reached.
-	 * 
+	 *
 	 * @param maxIterations The maximum number of iterations to run.
 	 */
 	public GSAConnectedComponents(Integer maxIterations) {
@@ -74,13 +73,13 @@ public class GSAConnectedComponents<K, VV extends Comparable<VV>, EV>
 		TypeInformation<VV> valueTypeInfo = ((TupleTypeInfo<?>) graph.getVertices().getType()).getTypeAt(1);
 
 		Graph<K, VV, NullValue> undirectedGraph = graph
-			.mapEdges(new MapTo<Edge<K, EV>, NullValue>(NullValue.getInstance()))
+			.mapEdges(new MapTo<>(NullValue.getInstance()))
 			.getUndirected();
 
 		return undirectedGraph.runGatherSumApplyIteration(
 			new GatherNeighborIds<>(valueTypeInfo),
 			new SelectMinId<>(valueTypeInfo),
-			new UpdateComponentId<K, VV>(valueTypeInfo),
+			new UpdateComponentId<>(valueTypeInfo),
 			maxIterations).getVertices();
 	}
 

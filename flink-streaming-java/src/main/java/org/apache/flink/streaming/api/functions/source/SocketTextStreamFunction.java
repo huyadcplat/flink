@@ -28,6 +28,7 @@ import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
+import static org.apache.flink.util.NetUtils.isValidClientPort;
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -71,7 +72,7 @@ public class SocketTextStreamFunction implements SourceFunction<String> {
 	}
 
 	public SocketTextStreamFunction(String hostname, int port, String delimiter, long maxNumRetries, long delayBetweenRetries) {
-		checkArgument(port > 0 && port < 65536, "port is out of range");
+		checkArgument(isValidClientPort(port), "port is out of range");
 		checkArgument(maxNumRetries >= -1, "maxNumRetries must be zero or larger (num retries), or -1 (infinite retries)");
 		checkArgument(delayBetweenRetries >= 0, "delayBetweenRetries must be zero or positive");
 
@@ -94,21 +95,22 @@ public class SocketTextStreamFunction implements SourceFunction<String> {
 
 				LOG.info("Connecting to server socket " + hostname + ':' + port);
 				socket.connect(new InetSocketAddress(hostname, port), CONNECTION_TIMEOUT_TIME);
-				BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+				try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
 
-				char[] cbuf = new char[8192];
-				int bytesRead;
-				while (isRunning && (bytesRead = reader.read(cbuf)) != -1) {
-					buffer.append(cbuf, 0, bytesRead);
-					int delimPos;
-					while (buffer.length() >= delimiter.length() && (delimPos = buffer.indexOf(delimiter)) != -1) {
-						String record = buffer.substring(0, delimPos);
-						// truncate trailing carriage return
-						if (delimiter.equals("\n") && record.endsWith("\r")) {
-							record = record.substring(0, record.length() - 1);
+					char[] cbuf = new char[8192];
+					int bytesRead;
+					while (isRunning && (bytesRead = reader.read(cbuf)) != -1) {
+						buffer.append(cbuf, 0, bytesRead);
+						int delimPos;
+						while (buffer.length() >= delimiter.length() && (delimPos = buffer.indexOf(delimiter)) != -1) {
+							String record = buffer.substring(0, delimPos);
+							// truncate trailing carriage return
+							if (delimiter.equals("\n") && record.endsWith("\r")) {
+								record = record.substring(0, record.length() - 1);
+							}
+							ctx.collect(record);
+							buffer.delete(0, delimPos + delimiter.length());
 						}
-						ctx.collect(record);
-						buffer.delete(0, delimPos + delimiter.length());
 					}
 				}
 			}

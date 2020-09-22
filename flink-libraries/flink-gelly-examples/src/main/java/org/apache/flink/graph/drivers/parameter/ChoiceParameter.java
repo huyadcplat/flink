@@ -18,11 +18,12 @@
 
 package org.apache.flink.graph.drivers.parameter;
 
-import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.text.StrBuilder;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.client.program.ProgramParametrizationException;
 import org.apache.flink.util.Preconditions;
+
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.text.StrBuilder;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -50,12 +51,7 @@ extends SimpleParameter<String> {
 		super(owner, name);
 	}
 
-	/**
-	 * Set the default value and add to the list of choices.
-	 *
-	 * @param defaultValue the default value.
-	 * @return this
-	 */
+	@Override
 	public ChoiceParameter setDefaultValue(String defaultValue) {
 		super.setDefaultValue(defaultValue);
 		choices.add(defaultValue);
@@ -130,5 +126,10 @@ extends SimpleParameter<String> {
 
 		throw new ProgramParametrizationException(
 			"Selection '" + selected + "' for option '" + name + "' is not in choices '[" + StringUtils.join(choices, ", ") + "]'");
+	}
+
+	@Override
+	public String toString() {
+		return this.value;
 	}
 }

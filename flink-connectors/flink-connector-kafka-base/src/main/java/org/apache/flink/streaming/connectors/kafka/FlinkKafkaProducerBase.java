@@ -17,30 +17,25 @@
 
 package org.apache.flink.streaming.connectors.kafka;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.api.java.ClosureCleaner;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
-import org.apache.flink.runtime.util.SerializableObject;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
+import org.apache.flink.streaming.connectors.kafka.internals.KeyedSerializationSchemaWrapper;
 import org.apache.flink.streaming.connectors.kafka.internals.metrics.KafkaMetricWrapper;
-import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkKafkaDelegatePartitioner;
 import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkKafkaPartitioner;
 import org.apache.flink.streaming.util.serialization.KeyedSerializationSchema;
 import org.apache.flink.util.NetUtils;
+import org.apache.flink.util.SerializableObject;
+
 import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -53,18 +48,26 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static java.util.Objects.requireNonNull;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 
+import static java.util.Objects.requireNonNull;
 
 /**
  * Flink Sink to produce data into a Kafka topic.
  *
- * Please note that this producer provides at-least-once reliability guarantees when
+ * <p>Please note that this producer provides at-least-once reliability guarantees when
  * checkpoints are enabled and setFlushOnCheckpoint(true) is set.
  * Otherwise, the producer doesn't provide any reliability guarantees.
  *
  * @param <IN> Type of the messages to write into Kafka.
  */
+@Internal
 public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> implements CheckpointedFunction {
 
 	private static final Logger LOG = LoggerFactory.getLogger(FlinkKafkaProducerBase.class);
@@ -98,7 +101,7 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 	protected final FlinkKafkaPartitioner<IN> flinkKafkaPartitioner;
 
 	/**
-	 * Partitions of each topic
+	 * Partitions of each topic.
 	 */
 	protected final Map<String, int[]> topicPartitionsMap;
 
@@ -110,20 +113,20 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 	/**
 	 * If true, the producer will wait until all outstanding records have been send to the broker.
 	 */
-	protected boolean flushOnCheckpoint;
+	protected boolean flushOnCheckpoint = true;
 
 	// -------------------------------- Runtime fields ------------------------------------------
 
-	/** KafkaProducer instance */
+	/** KafkaProducer instance. */
 	protected transient KafkaProducer<byte[], byte[]> producer;
 
-	/** The callback than handles error propagation or logging callbacks */
+	/** The callback than handles error propagation or logging callbacks. */
 	protected transient Callback callback;
 
-	/** Errors encountered in the async producer are stored here */
+	/** Errors encountered in the async producer are stored here. */
 	protected transient volatile Exception asyncException;
 
-	/** Lock for accessing the pending records */
+	/** Lock for accessing the pending records. */
 	protected final SerializableObject pendingRecordsLock = new SerializableObject();
 
 	/** Number of unacknowledged records. */
@@ -141,7 +144,7 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 		requireNonNull(defaultTopicId, "TopicID not set");
 		requireNonNull(serializationSchema, "serializationSchema not set");
 		requireNonNull(producerConfig, "producerConfig not set");
-		ClosureCleaner.clean(customPartitioner, true);
+		ClosureCleaner.clean(customPartitioner, ExecutionConfig.ClosureCleanerLevel.RECURSIVE, true);
 		ClosureCleaner.ensureSerializable(serializationSchema);
 
 		this.defaultTopicId = defaultTopicId;
@@ -151,13 +154,13 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 
 		// set the producer configuration properties for kafka record key value serializers.
 		if (!producerConfig.containsKey(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG)) {
-			this.producerConfig.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getCanonicalName());
+			this.producerConfig.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
 		} else {
 			LOG.warn("Overwriting the '{}' is not recommended", ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG);
 		}
 
 		if (!producerConfig.containsKey(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG)) {
-			this.producerConfig.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getCanonicalName());
+			this.producerConfig.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
 		} else {
 			LOG.warn("Overwriting the '{}' is not recommended", ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG);
 		}
@@ -196,9 +199,10 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 	}
 
 	/**
-	 * Used for testing only
+	 * Used for testing only.
 	 */
-	protected <K,V> KafkaProducer<K,V> getKafkaProducer(Properties props) {
+	@VisibleForTesting
+	protected <K, V> KafkaProducer<K, V> getKafkaProducer(Properties props) {
 		return new KafkaProducer<>(props);
 	}
 
@@ -208,16 +212,16 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 	 * Initializes the connection to Kafka.
 	 */
 	@Override
-	public void open(Configuration configuration) {
+	public void open(Configuration configuration) throws Exception {
+		if (schema instanceof KeyedSerializationSchemaWrapper) {
+			((KeyedSerializationSchemaWrapper<IN>) schema).getSerializationSchema()
+				.open(() -> getRuntimeContext().getMetricGroup().addGroup("user"));
+		}
 		producer = getKafkaProducer(this.producerConfig);
 
 		RuntimeContext ctx = getRuntimeContext();
 
-		if(null != flinkKafkaPartitioner) {
-			if(flinkKafkaPartitioner instanceof FlinkKafkaDelegatePartitioner) {
-				((FlinkKafkaDelegatePartitioner) flinkKafkaPartitioner).setPartitions(
-						getPartitionsByTopic(this.defaultTopicId, this.producer));
-			}
+		if (null != flinkKafkaPartitioner) {
 			flinkKafkaPartitioner.open(ctx.getIndexOfThisSubtask(), ctx.getNumberOfParallelSubtasks());
 		}
 
@@ -239,7 +243,7 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 			}
 		}
 
-		if (flushOnCheckpoint && !((StreamingRuntimeContext)this.getRuntimeContext()).isCheckpointingEnabled()) {
+		if (flushOnCheckpoint && !((StreamingRuntimeContext) this.getRuntimeContext()).isCheckpointingEnabled()) {
 			LOG.warn("Flushing on checkpoint is enabled, but checkpointing is not enabled. Disabling flushing.");
 			flushOnCheckpoint = false;
 		}
@@ -275,7 +279,7 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 	 * 		The incoming data
 	 */
 	@Override
-	public void invoke(IN next) throws Exception {
+	public void invoke(IN next, Context context) throws Exception {
 		// propagate asynchronous errors
 		checkErroneous();
 
@@ -287,7 +291,7 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 		}
 
 		int[] partitions = this.topicPartitionsMap.get(targetTopic);
-		if(null == partitions) {
+		if (null == partitions) {
 			partitions = getPartitionsByTopic(targetTopic, producer);
 			this.topicPartitionsMap.put(targetTopic, partitions);
 		}
@@ -309,7 +313,6 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 		}
 		producer.send(record, callback);
 	}
-
 
 	@Override
 	public void close() throws Exception {

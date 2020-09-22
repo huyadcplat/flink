@@ -18,93 +18,109 @@
 
 package org.apache.flink.runtime.io.network.api.writer;
 
-import org.apache.flink.runtime.event.TaskEvent;
-import org.apache.flink.runtime.io.network.api.TaskEventHandler;
-import org.apache.flink.runtime.io.network.buffer.Buffer;
-import org.apache.flink.runtime.io.network.buffer.BufferProvider;
-import org.apache.flink.runtime.io.network.partition.ResultPartition;
+import org.apache.flink.runtime.io.AvailabilityProvider;
+import org.apache.flink.runtime.io.network.buffer.BufferBuilder;
+import org.apache.flink.runtime.io.network.buffer.BufferConsumer;
+import org.apache.flink.runtime.io.network.partition.BufferAvailabilityListener;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionID;
-import org.apache.flink.runtime.util.event.EventListener;
+import org.apache.flink.runtime.io.network.partition.ResultSubpartitionView;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 
 /**
- * A buffer-oriented runtime result writer.
- * <p>
- * The {@link ResultPartitionWriter} is the runtime API for producing results. It
- * supports two kinds of data to be sent: buffers and events.
+ * A buffer-oriented runtime result writer API for producing results.
+ *
+ * <p>If {@link ResultPartitionWriter#close()} is called before {@link ResultPartitionWriter#fail(Throwable)} or
+ * {@link ResultPartitionWriter#finish()}, it abruptly triggers failure and cancellation of production.
+ * In this case {@link ResultPartitionWriter#fail(Throwable)} still needs to be called afterwards to fully release
+ * all resources associated the the partition and propagate failure cause to the consumer if possible.
  */
-public class ResultPartitionWriter implements EventListener<TaskEvent> {
+public interface ResultPartitionWriter extends AutoCloseable, AvailabilityProvider {
 
-	private final ResultPartition partition;
+	/**
+	 * Setup partition, potentially heavy-weight, blocking operation comparing to just creation.
+	 */
+	void setup() throws IOException;
 
-	private final TaskEventHandler taskEventHandler = new TaskEventHandler();
+	ResultPartitionID getPartitionId();
 
-	public ResultPartitionWriter(ResultPartition partition) {
-		this.partition = partition;
-	}
+	int getNumberOfSubpartitions();
 
-	// ------------------------------------------------------------------------
-	// Attributes
-	// ------------------------------------------------------------------------
+	int getNumTargetKeyGroups();
 
-	public ResultPartitionID getPartitionId() {
-		return partition.getPartitionId();
-	}
+	/**
+	 * Requests a {@link BufferBuilder} from this partition for writing data.
+	 */
+	BufferBuilder getBufferBuilder(int targetChannel) throws IOException, InterruptedException;
 
-	public BufferProvider getBufferProvider() {
-		return partition.getBufferProvider();
-	}
 
-	public int getNumberOfOutputChannels() {
-		return partition.getNumberOfSubpartitions();
-	}
+	/**
+	 * Try to request a {@link BufferBuilder} from this partition for writing data.
+	 *
+	 * <p>Returns <code>null</code> if no buffer is available or the buffer provider has been destroyed.
+	 */
+	BufferBuilder tryGetBufferBuilder(int targetChannel) throws IOException;
 
-	public int getNumTargetKeyGroups() {
-		return partition.getNumTargetKeyGroups();
-	}
+	/**
+	 * Adds the bufferConsumer to the subpartition with the given index.
+	 *
+	 * <p>This method takes the ownership of the passed {@code bufferConsumer} and thus is responsible for releasing
+	 * it's resources.
+	 *
+	 * <p>To avoid problems with data re-ordering, before adding new {@link BufferConsumer} the previously added one
+	 * the given {@code subpartitionIndex} must be marked as {@link BufferConsumer#isFinished()}.
+	 *
+	 * @return true if operation succeeded and bufferConsumer was enqueued for consumption.
+	 */
+	boolean addBufferConsumer(BufferConsumer bufferConsumer, int subpartitionIndex, boolean isPriorityEvent) throws IOException;
 
-	// ------------------------------------------------------------------------
-	// Data processing
-	// ------------------------------------------------------------------------
-
-	public void writeBuffer(Buffer buffer, int targetChannel) throws IOException {
-		partition.add(buffer, targetChannel);
+	/**
+	 * Adds the bufferConsumer to the subpartition with the given index.
+	 *
+	 * <p>This method takes the ownership of the passed {@code bufferConsumer} and thus is responsible for releasing
+	 * it's resources.
+	 *
+	 * <p>To avoid problems with data re-ordering, before adding new {@link BufferConsumer} the previously added one
+	 * the given {@code subpartitionIndex} must be marked as {@link BufferConsumer#isFinished()}.
+	 *
+	 * @return true if operation succeeded and bufferConsumer was enqueued for consumption.
+	 */
+	default boolean addBufferConsumer(BufferConsumer bufferConsumer, int subpartitionIndex) throws IOException {
+		return addBufferConsumer(bufferConsumer, subpartitionIndex, false);
 	}
 
 	/**
-	 * Writes the given buffer to all available target channels.
-	 *
-	 * The buffer is taken over and used for each of the channels.
-	 * It will be recycled afterwards.
-	 *
-	 * @param eventBuffer the buffer to write
-	 * @throws IOException
+	 * Returns a reader for the subpartition with the given index.
 	 */
-	public void writeBufferToAllChannels(final Buffer eventBuffer) throws IOException {
-		try {
-			for (int targetChannel = 0; targetChannel < partition.getNumberOfSubpartitions(); targetChannel++) {
-				// retain the buffer so that it can be recycled by each channel of targetPartition
-				eventBuffer.retain();
-				writeBuffer(eventBuffer, targetChannel);
-			}
-		} finally {
-			// we do not need to further retain the eventBuffer
-			// (it will be recycled after the last channel stops using it)
-			eventBuffer.recycle();
-		}
-	}
+	ResultSubpartitionView createSubpartitionView(int index, BufferAvailabilityListener availabilityListener) throws IOException;
 
-	// ------------------------------------------------------------------------
-	// Event handling
-	// ------------------------------------------------------------------------
+	/**
+	 * Manually trigger consumption from enqueued {@link BufferConsumer BufferConsumers} in all subpartitions.
+	 */
+	void flushAll();
 
-	public void subscribeToEvent(EventListener<TaskEvent> eventListener, Class<? extends TaskEvent> eventType) {
-		taskEventHandler.subscribe(eventListener, eventType);
-	}
+	/**
+	 * Manually trigger consumption from enqueued {@link BufferConsumer BufferConsumers} in one specified subpartition.
+	 */
+	void flush(int subpartitionIndex);
 
-	@Override
-	public void onEvent(TaskEvent event) {
-		taskEventHandler.publish(event);
-	}
+	/**
+	 * Fail the production of the partition.
+	 *
+	 * <p>This method propagates non-{@code null} failure causes to consumers on a best-effort basis. This call also
+	 * leads to the release of all resources associated with the partition. Closing of the partition is still needed
+	 * afterwards if it has not been done before.
+	 *
+	 * @param throwable failure cause
+	 */
+	void fail(@Nullable Throwable throwable);
+
+	/**
+	 * Successfully finish the production of the partition.
+	 *
+	 * <p>Closing of partition is still needed afterwards.
+	 */
+	void finish() throws IOException;
 }

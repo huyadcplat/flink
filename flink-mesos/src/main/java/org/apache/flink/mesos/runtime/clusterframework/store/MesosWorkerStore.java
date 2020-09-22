@@ -18,6 +18,8 @@
 
 package org.apache.flink.mesos.runtime.clusterframework.store;
 
+import org.apache.flink.runtime.resourcemanager.WorkerResourceSpec;
+
 import org.apache.mesos.Protos;
 
 import java.io.Serializable;
@@ -93,22 +95,21 @@ public interface MesosWorkerStore {
 
 		private final Protos.TaskID taskID;
 
+		private final WorkerResourceSpec workerResourceSpec;
+
 		private final Option<Protos.SlaveID> slaveID;
 
 		private final Option<String> hostname;
 
 		private final WorkerState state;
 
-		private Worker(Protos.TaskID taskID, Option<Protos.SlaveID> slaveID, Option<String> hostname, WorkerState state) {
-			requireNonNull(taskID, "taskID");
-			requireNonNull(slaveID, "slaveID");
-			requireNonNull(hostname, "hostname");
-			requireNonNull(state, "state");
-
-			this.taskID = taskID;
-			this.slaveID = slaveID;
-			this.hostname = hostname;
-			this.state = state;
+		private Worker(Protos.TaskID taskID, WorkerResourceSpec workerResourceSpec,
+				Option<Protos.SlaveID> slaveID, Option<String> hostname, WorkerState state) {
+			this.taskID = requireNonNull(taskID, "taskID");
+			this.workerResourceSpec = requireNonNull(workerResourceSpec, "workerResourceSpec");
+			this.slaveID = requireNonNull(slaveID, "slaveID");
+			this.hostname = requireNonNull(hostname, "hostname");
+			this.state = requireNonNull(state, "state");
 		}
 
 		/**
@@ -116,6 +117,14 @@ public interface MesosWorkerStore {
 		 */
 		public Protos.TaskID taskID() {
 			return taskID;
+		}
+
+		/**
+		 * Get the worker request associated with the worker.
+		 * @return
+		 */
+		public WorkerResourceSpec workerResourceSpec() {
+			return workerResourceSpec;
 		}
 
 		/**
@@ -145,9 +154,10 @@ public interface MesosWorkerStore {
 		 * Create a new worker with the given taskID.
 		 * @return a new worker instance.
 		 */
-		public static Worker newWorker(Protos.TaskID taskID) {
+		public static Worker newWorker(Protos.TaskID taskID, WorkerResourceSpec workerResourceSpec) {
 			return new Worker(
 				taskID,
+				workerResourceSpec,
 				Option.<Protos.SlaveID>empty(), Option.<String>empty(),
 				WorkerState.New);
 		}
@@ -157,7 +167,7 @@ public interface MesosWorkerStore {
 		 * @return a new worker instance (does not mutate the current instance).
 		 */
 		public Worker launchWorker(Protos.SlaveID slaveID, String hostname) {
-			return new Worker(taskID, Option.apply(slaveID), Option.apply(hostname), WorkerState.Launched);
+			return new Worker(taskID, workerResourceSpec, Option.apply(slaveID), Option.apply(hostname), WorkerState.Launched);
 		}
 
 		/**
@@ -165,7 +175,7 @@ public interface MesosWorkerStore {
 		 * @return a new worker instance (does not mutate the current instance).
 		 */
 		public Worker releaseWorker() {
-			return new Worker(taskID, slaveID, hostname, WorkerState.Released);
+			return new Worker(taskID, workerResourceSpec, slaveID, hostname, WorkerState.Released);
 		}
 
 		@Override
@@ -180,12 +190,13 @@ public interface MesosWorkerStore {
 			return Objects.equals(taskID, worker.taskID) &&
 				Objects.equals(slaveID, worker.slaveID) &&
 				Objects.equals(hostname, worker.hostname) &&
+				Objects.equals(workerResourceSpec, worker.workerResourceSpec) &&
 				state == worker.state;
 		}
 
 		@Override
 		public int hashCode() {
-			return Objects.hash(taskID, slaveID, hostname, state);
+			return Objects.hash(taskID, slaveID, hostname, state, workerResourceSpec);
 		}
 
 		@Override
@@ -195,6 +206,7 @@ public interface MesosWorkerStore {
 				", slaveID=" + slaveID +
 				", hostname=" + hostname +
 				", state=" + state +
+				", workerRequest=" + workerResourceSpec +
 				'}';
 		}
 	}

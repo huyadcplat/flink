@@ -18,40 +18,40 @@
 
 package org.apache.flink.runtime.webmonitor.testutils;
 
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelHandler;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelPipeline;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.codec.http.DefaultFullHttpRequest;
-import io.netty.handler.codec.http.HttpClientCodec;
-import io.netty.handler.codec.http.HttpContent;
-import io.netty.handler.codec.http.HttpContentDecompressor;
-import io.netty.handler.codec.http.HttpHeaders;
-import io.netty.handler.codec.http.HttpMethod;
-import io.netty.handler.codec.http.HttpObject;
-import io.netty.handler.codec.http.HttpRequest;
-import io.netty.handler.codec.http.HttpResponse;
-import io.netty.handler.codec.http.HttpResponseStatus;
-import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.http.LastHttpContent;
-import io.netty.util.CharsetUtil;
+import org.apache.flink.shaded.netty4.io.netty.bootstrap.Bootstrap;
+import org.apache.flink.shaded.netty4.io.netty.channel.Channel;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelFuture;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelHandler;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelInitializer;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelPipeline;
+import org.apache.flink.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.flink.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
+import org.apache.flink.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
+import org.apache.flink.shaded.netty4.io.netty.channel.socket.SocketChannel;
+import org.apache.flink.shaded.netty4.io.netty.channel.socket.nio.NioSocketChannel;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.DefaultFullHttpRequest;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpClientCodec;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpContent;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpContentDecompressor;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpHeaders;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpMethod;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpObject;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpRequest;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpResponse;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpVersion;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.LastHttpContent;
+import org.apache.flink.shaded.netty4.io.netty.util.CharsetUtil;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-
-import scala.concurrent.duration.FiniteDuration;
 
 /**
  * A simple HTTP client.
@@ -129,7 +129,7 @@ public class HttpTestClient implements AutoCloseable {
 	 *
 	 * @param request The {@link HttpRequest} to send to the server
 	 */
-	public void sendRequest(HttpRequest request, FiniteDuration timeout) throws InterruptedException, TimeoutException {
+	public void sendRequest(HttpRequest request, Duration timeout) throws InterruptedException, TimeoutException {
 		LOG.debug("Writing {}.", request);
 
 		// Make the connection attempt.
@@ -152,7 +152,7 @@ public class HttpTestClient implements AutoCloseable {
 	 *
 	 * @param path The $path to GET (http://$host:$host/$path)
 	 */
-	public void sendGetRequest(String path, FiniteDuration timeout) throws TimeoutException, InterruptedException {
+	public void sendGetRequest(String path, Duration timeout) throws TimeoutException, InterruptedException {
 		if (!path.startsWith("/")) {
 			path = "/" + path;
 		}
@@ -171,13 +171,32 @@ public class HttpTestClient implements AutoCloseable {
 	 *
 	 * @param path The $path to DELETE (http://$host:$host/$path)
 	 */
-	public void sendDeleteRequest(String path, FiniteDuration timeout) throws TimeoutException, InterruptedException {
+	public void sendDeleteRequest(String path, Duration timeout) throws TimeoutException, InterruptedException {
 		if (!path.startsWith("/")) {
 			path = "/" + path;
 		}
 
 		HttpRequest getRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1,
 				HttpMethod.DELETE, path);
+		getRequest.headers().set(HttpHeaders.Names.HOST, host);
+		getRequest.headers().set(HttpHeaders.Names.CONNECTION, HttpHeaders.Values.CLOSE);
+
+		sendRequest(getRequest, timeout);
+	}
+
+	/**
+	 * Sends a simple PATCH request to the given path. You only specify the $path part of
+	 * http://$host:$host/$path.
+	 *
+	 * @param path The $path to PATCH (http://$host:$host/$path)
+	 */
+	public void sendPatchRequest(String path, Duration timeout) throws TimeoutException, InterruptedException {
+		if (!path.startsWith("/")) {
+			path = "/" + path;
+		}
+
+		HttpRequest getRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1,
+			HttpMethod.PATCH, path);
 		getRequest.headers().set(HttpHeaders.Names.HOST, host);
 		getRequest.headers().set(HttpHeaders.Names.CONNECTION, HttpHeaders.Values.CLOSE);
 
@@ -201,7 +220,7 @@ public class HttpTestClient implements AutoCloseable {
 	 * @param timeout Timeout in milliseconds for the next response to become available
 	 * @return The next available {@link SimpleHttpResponse}
 	 */
-	public SimpleHttpResponse getNextResponse(FiniteDuration timeout) throws InterruptedException,
+	public SimpleHttpResponse getNextResponse(Duration timeout) throws InterruptedException,
 			TimeoutException {
 
 		SimpleHttpResponse response = responses.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
@@ -265,7 +284,7 @@ public class HttpTestClient implements AutoCloseable {
 		@Override
 		public String toString() {
 			return "HttpResponse(status=" + status + ", type='" + type + "'" + ", content='" +
-					content + "')";
+					content + ", location = " + location + "')";
 		}
 	}
 

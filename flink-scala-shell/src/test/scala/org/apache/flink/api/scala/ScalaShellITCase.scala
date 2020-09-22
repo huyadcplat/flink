@@ -20,21 +20,33 @@ package org.apache.flink.api.scala
 
 import java.io._
 
-import akka.actor.ActorRef
-import akka.pattern.Patterns
-import org.apache.flink.runtime.minicluster.StandaloneMiniCluster
-import org.apache.flink.configuration.{ConfigConstants, Configuration, GlobalConfiguration}
-import org.apache.flink.test.util.TestBaseUtils
+import org.apache.flink.client.deployment.executors.RemoteExecutor
+import org.apache.flink.configuration.{Configuration, DeploymentOptions, JobManagerOptions, RestOptions}
+import org.apache.flink.runtime.clusterframework.BootstrapTools
+import org.apache.flink.runtime.minicluster.MiniCluster
+import org.apache.flink.runtime.testutils.MiniClusterResource
+import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration
 import org.apache.flink.util.TestLogger
-import org.junit.{AfterClass, Assert, BeforeClass, Test}
+import org.junit._
+import org.junit.rules.TemporaryFolder
 
-import scala.concurrent.{Await, Future}
-import scala.concurrent.duration.FiniteDuration
 import scala.tools.nsc.Settings
 
 class ScalaShellITCase extends TestLogger {
 
   import ScalaShellITCase._
+
+  val _temporaryFolder = new TemporaryFolder
+
+  @Rule
+  def temporaryFolder = _temporaryFolder
+
+  @After
+  def resetClassLoder(): Unit = {
+    // The Scala interpreter changes current class loader to ScalaClassLoader in every execution
+    // refer to [[ILoop.process()]]. So, we need reset it to original class loader after every Test.
+    Thread.currentThread().setContextClassLoader(classOf[ScalaShellITCase].getClassLoader)
+  }
 
   /** Prevent re-creation of environment */
   @Test
@@ -164,79 +176,107 @@ class ScalaShellITCase extends TestLogger {
     Assert.assertTrue(output.contains("WC(world,10)"))
   }
 
-  /** Submit external library */
+  @Test
+  def testSimpleSelectWithFilterBatchTableAPIQuery: Unit = {
+    val input =
+      """
+        |val data = Seq(
+        |    (1, 1L, "Hi"),
+        |    (2, 2L, "Hello"),
+        |    (3, 2L, "Hello world"))
+        |val t = benv.fromCollection(data).toTable(btenv, 'a, 'b, 'c).select('a,'c).where(
+        |'a% 2 === 1 )
+        |val results = t.toDataSet[Row].collect()
+        |results.foreach(println)
+        |:q
+      """.stripMargin
+    val output = processInShell(input)
+    Assert.assertFalse(output.toLowerCase.contains("failed"))
+    Assert.assertFalse(output.toLowerCase.contains("error"))
+    Assert.assertFalse(output.toLowerCase.contains("exception"))
+    Assert.assertTrue(output.contains("1,Hi"))
+    Assert.assertTrue(output.contains("3,Hello world"))
+  }
+
+  @Test
+  def testGroupedAggregationStreamTableAPIQuery: Unit = {
+    val input =
+      """
+        |  val data = List(
+        |    ("Hello", 1),
+        |    ("word", 1),
+        |    ("Hello", 1),
+        |    ("bark", 1),
+        |    ("bark", 1),
+        |    ("bark", 1),
+        |    ("bark", 1),
+        |    ("bark", 1),
+        |    ("bark", 1),
+        |    ("flink", 1)
+        |  )
+        | val stream = senv.fromCollection(data)
+        | val table = stream.toTable(stenv, 'word, 'num)
+        | val resultTable = table.groupBy('word).select('num.sum as 'count).groupBy('count).select(
+        | 'count,'count.count as 'frequency)
+        | val results = resultTable.toRetractStream[Row]
+        | results.print
+        | senv.execute
+      """.stripMargin
+    val output = processInShell(input)
+    Assert.assertTrue(output.contains("6,1"))
+    Assert.assertTrue(output.contains("1,2"))
+    Assert.assertTrue(output.contains("2,1"))
+    Assert.assertFalse(output.toLowerCase.contains("failed"))
+    Assert.assertFalse(output.toLowerCase.contains("error"))
+    Assert.assertFalse(output.toLowerCase.contains("exception"))
+  }
+
+  /**
+   * Submit external library.
+   * Disabled due to FLINK-7111.
+   */
+  @Ignore
   @Test
   def testSubmissionOfExternalLibraryBatch: Unit = {
     val input =
       """
-         import org.apache.flink.ml.math._
-         val denseVectors = benv.fromElements[Vector](DenseVector(1.0, 2.0, 3.0))
-         denseVectors.print()
+         import org.apache.flink.api.scala.jar.TestingData
+         val source = benv.fromCollection(TestingData.elements)
+         source.print()
       """.stripMargin
 
-    // find jar file that contains the ml code
-    var externalJar = ""
-    val folder = findLibraryFolder(
-      "../flink-libraries/flink-ml/target/",
-      "../../flink-libraries/flink-ml/target/")
-
-    val listOfFiles = folder.listFiles()
-
-    for (i <- listOfFiles.indices) {
-      val filename: String = listOfFiles(i).getName
-      if (!filename.contains("test") && !filename.contains("original") && filename.contains(
-        ".jar")) {
-        externalJar = listOfFiles(i).getAbsolutePath
-      }
-    }
-
-    assert(externalJar != "")
-
-    val output: String = processInShell(input, Option(externalJar))
+    val output: String = processInShell(input, Option("customjar-test-jar.jar"))
 
     Assert.assertFalse(output.contains("failed"))
     Assert.assertFalse(output.contains("error"))
     Assert.assertFalse(output.contains("Exception"))
 
-    Assert.assertTrue(output.contains("\nDenseVector(1.0, 2.0, 3.0)"))
+
+    Assert.assertTrue(output.contains("\nHELLO 42"))
   }
 
-  /** Submit external library */
+  /**
+   * Submit external library.
+   * Disabled due to FLINK-7111.
+   */
+  @Ignore
   @Test
   def testSubmissionOfExternalLibraryStream: Unit = {
     val input =
       """
-        import org.apache.flink.ml.math._
-        val denseVectors = senv.fromElements[Vector](DenseVector(1.0, 2.0, 3.0))
-        denseVectors.print()
+        import org.apache.flink.api.scala.jar.TestingData
+        val source = senv.fromCollection(TestingData.elements)
+        source.print()
         senv.execute
       """.stripMargin
 
-    // find jar file that contains the ml code
-    var externalJar = ""
-    val folder = findLibraryFolder(
-      "../flink-libraries/flink-ml/target/",
-      "../../flink-libraries/flink-ml/target/")
-
-    val listOfFiles = folder.listFiles()
-
-    for (i <- listOfFiles.indices) {
-      val filename: String = listOfFiles(i).getName
-      if (!filename.contains("test") && !filename.contains("original") && filename.contains(
-        ".jar")) {
-        externalJar = listOfFiles(i).getAbsolutePath
-      }
-    }
-
-    assert(externalJar != "")
-
-    val output: String = processInShell(input, Option(externalJar))
+    val output: String = processInShell(input, Option("customjar-test-jar.jar"))
 
     Assert.assertFalse(output.contains("failed"))
     Assert.assertFalse(output.contains("error"))
     Assert.assertFalse(output.contains("Exception"))
 
-    Assert.assertTrue(output.contains("\nDenseVector(1.0, 2.0, 3.0)"))
+    Assert.assertTrue(output.contains("\nHELLO 42"))
   }
 
 
@@ -296,23 +336,18 @@ class ScalaShellITCase extends TestLogger {
     val oldOut: PrintStream = System.out
     System.setOut(new PrintStream(baos))
 
-    val confFile: String = classOf[ScalaShellLocalStartupITCase]
-      .getResource("/flink-conf.yaml")
-      .getFile
-    val confDir = new File(confFile).getAbsoluteFile.getParent
+    val dir = temporaryFolder.newFolder()
+    BootstrapTools.writeConfiguration(configuration, new File(dir, "flink-conf.yaml"))
 
-    val args = cluster match {
-      case Some(cl) =>
-        Array(
-          "remote",
-          cl.getHostname,
-          Integer.toString(cl.getPort),
-          "--configDir",
-          confDir)
-      case None => throw new IllegalStateException("Cluster has not been started.")
-    }
+    val port: Int = clusterResource.getRestAddres.getPort
+    val hostname : String = clusterResource.getRestAddres.getHost
 
-
+    val args = Array(
+      "remote",
+      hostname,
+      Integer.toString(port),
+      "--configDir",
+      dir.getAbsolutePath)
 
     //start scala shell with initialized
     // buffered reader for testing
@@ -335,28 +370,100 @@ class ScalaShellITCase extends TestLogger {
     Assert.assertFalse(output.contains("ERROR"))
     Assert.assertFalse(output.contains("Exception"))
   }
+
+  @Test
+  def testImportJavaCollection(): Unit = {
+    val input = """
+      import java.util.List
+      val jul: List[Int] = new java.util.ArrayList[Int]()
+      jul.add(2)
+      jul.add(4)
+      jul.add(6)
+      jul.add(8)
+      jul.add(10)
+      val str = "the java list size is: " + jul.size
+    """.stripMargin
+
+    val output = processInShell(input)
+
+    Assert.assertTrue(output.contains("the java list size is: 5"))
+    Assert.assertFalse(output.toLowerCase.contains("failed"))
+    Assert.assertFalse(output.toLowerCase.contains("error"))
+    Assert.assertFalse(output.toLowerCase.contains("exception"))
+
+  }
+
+  @Test
+  def testImplicitConversionBetweenJavaAndScala(): Unit = {
+    val input =
+      """
+        import collection.JavaConversions._
+        import scala.collection.mutable.ArrayBuffer
+        val jul:java.util.List[Int] = ArrayBuffer(1,2,3,4,5)
+        val buf: Seq[Int] = jul
+        var sum = 0
+        buf.foreach(num => sum += num)
+        val str = "sum is: " + sum
+        val scala2jul = List(1,2,3)
+        scala2jul.add(7)
+      """.stripMargin
+
+    val output = processInShell(input)
+
+    Assert.assertTrue(output.contains("sum is: 15"))
+    Assert.assertFalse(output.toLowerCase.contains("failed"))
+    Assert.assertFalse(output.toLowerCase.contains("error"))
+    Assert.assertTrue(output.contains("java.lang.UnsupportedOperationException"))
+  }
+
+  @Test
+  def testImportPackageConflict(): Unit = {
+    val input =
+      """
+        import org.apache.flink.table.api._
+        import java.util.List
+        val jul: List[Int] = new java.util.ArrayList[Int]()
+        jul.add(2)
+        jul.add(4)
+        jul.add(6)
+        jul.add(8)
+        jul.add(10)
+        val str = "the java list size is: " + jul.size
+      """.stripMargin
+
+    val output = processInShell(input)
+    Assert.assertTrue(output.contains("the java list size is: 5"))
+    Assert.assertFalse(output.toLowerCase.contains("failed"))
+    Assert.assertFalse(output.toLowerCase.contains("error"))
+    Assert.assertFalse(output.toLowerCase.contains("exception"))
+  }
+
+  @Test
+  def testGetMultiExecutionEnvironment(): Unit = {
+    val input =
+      """
+        |val newEnv = ExecutionEnvironment.getExecutionEnvironment
+      """.stripMargin
+    val output = processInShell(input)
+    Assert.assertTrue(output.contains("java.lang.UnsupportedOperationException: Execution " +
+      "Environment is already defined for this shell."))
+  }
+
 }
 
 object ScalaShellITCase {
-  var cluster: Option[StandaloneMiniCluster] = None
 
-  val parallelism = 4
   val configuration = new Configuration()
+  var cluster: Option[MiniCluster] = None
 
-  @BeforeClass
-  def beforeAll(): Unit = {
-    configuration.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, parallelism)
+  val parallelism: Int = 4
 
-    cluster = Option(new StandaloneMiniCluster(configuration))
-  }
+  val _clusterResource = new MiniClusterResource(new MiniClusterResourceConfiguration.Builder()
+      .setNumberSlotsPerTaskManager(parallelism)
+      .build())
 
-  @AfterClass
-  def afterAll(): Unit = {
-    // The Scala interpreter somehow changes the class loader. Therfore, we have to reset it
-    Thread.currentThread().setContextClassLoader(classOf[ScalaShellITCase].getClassLoader)
-
-    cluster.foreach(_.close)
-  }
+  @ClassRule
+  def clusterResource = _clusterResource
 
   /**
    * Run the input using a Scala Shell and return the output of the shell.
@@ -372,55 +479,49 @@ object ScalaShellITCase {
     val oldOut = System.out
     System.setOut(new PrintStream(baos))
 
-    cluster match {
-      case Some(cl) =>
-        val repl = externalJars match {
-          case Some(ej) => new FlinkILoop(
-            cl.getHostname,
-            cl.getPort,
-            GlobalConfiguration.loadConfiguration(),
-            Option(Array(ej)),
-            in, new PrintWriter(out))
+    val port: Int = clusterResource.getRestAddres.getPort
+    val hostname : String = clusterResource.getRestAddres.getHost
 
-          case None => new FlinkILoop(
-            cl.getHostname,
-            cl.getPort,
-            GlobalConfiguration.loadConfiguration(),
-            in, new PrintWriter(out))
-        }
+    configuration.setString(DeploymentOptions.TARGET, RemoteExecutor.NAME)
+    configuration.setBoolean(DeploymentOptions.ATTACHED, true)
 
-        repl.settings = new Settings()
+    configuration.setString(JobManagerOptions.ADDRESS, hostname)
+    configuration.setInteger(JobManagerOptions.PORT, port)
 
-        // enable this line to use scala in intellij
-        repl.settings.usejavacp.value = true
+    configuration.setString(RestOptions.ADDRESS, hostname)
+    configuration.setInteger(RestOptions.PORT, port)
 
-        externalJars match {
-          case Some(ej) => repl.settings.classpath.value = ej
-          case None =>
-        }
+      val repl = externalJars match {
+        case Some(ej) => new FlinkILoop(
+          configuration,
+          Option(Array(ej)),
+          in, new PrintWriter(out))
 
-        repl.process(repl.settings)
-
-        repl.closeInterpreter()
-
-        System.setOut(oldOut)
-
-        baos.flush()
-
-        val stdout = baos.toString
-
-        out.toString + stdout
-      case _ => throw new IllegalStateException("The cluster has not been started.")
-    }
-  }
-
-  def findLibraryFolder(paths: String*): File = {
-    for (path <- paths) {
-      val folder = new File(path)
-      if (folder.exists()) {
-        return folder
+        case None => new FlinkILoop(
+          configuration,
+          in, new PrintWriter(out))
       }
-    }
-    throw new RuntimeException("Library folder not found in any of the supplied paths!")
+
+      repl.settings = new Settings()
+
+      // enable this line to use scala in intellij
+      repl.settings.usejavacp.value = true
+
+      externalJars match {
+        case Some(ej) => repl.settings.classpath.value = ej
+        case None =>
+      }
+
+      repl.process(repl.settings)
+
+      repl.closeInterpreter()
+
+      System.setOut(oldOut)
+
+      baos.flush()
+
+      val stdout = baos.toString
+
+      out.toString + stdout
   }
 }

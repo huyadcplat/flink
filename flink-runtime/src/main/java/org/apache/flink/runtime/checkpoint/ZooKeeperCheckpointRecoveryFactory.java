@@ -18,11 +18,12 @@
 
 package org.apache.flink.runtime.checkpoint;
 
-import org.apache.curator.framework.CuratorFramework;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.jobmanager.HighAvailabilityMode;
 import org.apache.flink.runtime.util.ZooKeeperUtils;
+
+import org.apache.flink.shaded.curator4.org.apache.curator.framework.CuratorFramework;
 
 import java.util.concurrent.Executor;
 
@@ -46,16 +47,6 @@ public class ZooKeeperCheckpointRecoveryFactory implements CheckpointRecoveryFac
 		this.client = checkNotNull(client, "Curator client");
 		this.config = checkNotNull(config, "Configuration");
 		this.executor = checkNotNull(executor, "Executor");
-	}
-
-	@Override
-	public void start() {
-		// Nothing to do
-	}
-
-	@Override
-	public void stop() {
-		// Nothing to do
 	}
 
 	@Override

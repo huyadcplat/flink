@@ -19,40 +19,42 @@
 package org.apache.flink.streaming.runtime.operators;
 
 import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.operators.testutils.MockEnvironment;
+import org.apache.flink.runtime.operators.testutils.MockEnvironmentBuilder;
 import org.apache.flink.runtime.operators.testutils.MockInputSplitProvider;
-import org.apache.flink.streaming.api.collector.selector.OutputSelector;
 import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.datastream.SplitStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.ProcessFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.StreamMap;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.OperatorChain;
+import org.apache.flink.streaming.runtime.tasks.StreamOperatorWrapper;
 import org.apache.flink.streaming.runtime.tasks.StreamTask;
+import org.apache.flink.streaming.util.MockStreamTaskBuilder;
+import org.apache.flink.util.Collector;
+import org.apache.flink.util.OutputTag;
 
 import org.junit.Assert;
 import org.junit.Test;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Tests for stream operator chaining behaviour.
  */
+@SuppressWarnings("serial")
 public class StreamOperatorChainingTest {
 
 	// We have to use static fields because the sink functions will go through serialization
@@ -81,6 +83,9 @@ public class StreamOperatorChainingTest {
 	 */
 	private void testMultiChaining(StreamExecutionEnvironment env) throws Exception {
 
+		// set parallelism to 2 to avoid chaining with source in case when available processors is 1.
+		env.setParallelism(2);
+
 		// the actual elements will not be used
 		DataStream<Integer> input = env.fromElements(1, 2, 3);
 
@@ -88,47 +93,24 @@ public class StreamOperatorChainingTest {
 		sink2Results = new ArrayList<>();
 
 		input = input
-				.map(new MapFunction<Integer, Integer>() {
-					private static final long serialVersionUID = 1L;
-
-					@Override
-					public Integer map(Integer value) throws Exception {
-						return value;
-					}
-				});
+				.map(value -> value);
 
 		input
-				.map(new MapFunction<Integer, String>() {
-					private static final long serialVersionUID = 1L;
-
-					@Override
-					public String map(Integer value) throws Exception {
-						return "First: " + value;
-					}
-				})
+				.map(value -> "First: " + value)
 				.addSink(new SinkFunction<String>() {
-					private static final long serialVersionUID = 1L;
 
 					@Override
-					public void invoke(String value) throws Exception {
+					public void invoke(String value, Context ctx) throws Exception {
 						sink1Results.add(value);
 					}
 				});
 
 		input
-				.map(new MapFunction<Integer, String>() {
-					private static final long serialVersionUID = 1L;
-
-					@Override
-					public String map(Integer value) throws Exception {
-						return "Second: " + value;
-					}
-				})
+				.map(value -> "Second: " + value)
 				.addSink(new SinkFunction<String>() {
-					private static final long serialVersionUID = 1L;
 
 					@Override
-					public void invoke(String value) throws Exception {
+					public void invoke(String value, Context ctx) throws Exception {
 						sink2Results.add(value);
 					}
 				});
@@ -147,25 +129,32 @@ public class StreamOperatorChainingTest {
 		StreamMap<Integer, Integer> headOperator =
 				streamConfig.getStreamOperator(Thread.currentThread().getContextClassLoader());
 
-		StreamTask<Integer, StreamMap<Integer, Integer>> mockTask =
-				createMockTask(streamConfig, chainedVertex.getName());
+		try (MockEnvironment environment = createMockEnvironment(chainedVertex.getName())) {
+			StreamTask<Integer, StreamMap<Integer, Integer>> mockTask = createMockTask(streamConfig, environment);
+			OperatorChain<Integer, StreamMap<Integer, Integer>> operatorChain = createOperatorChain(streamConfig, environment, mockTask);
 
-		OperatorChain<Integer, StreamMap<Integer, Integer>> operatorChain = new OperatorChain<>(mockTask);
+			headOperator.setup(mockTask, streamConfig, operatorChain.getMainOperatorOutput());
 
-		headOperator.setup(mockTask, streamConfig, operatorChain.getChainEntryPoint());
-
-		for (StreamOperator<?> operator : operatorChain.getAllOperators()) {
-			if (operator != null) {
-				operator.open();
+			for (StreamOperatorWrapper<?, ?> operatorWrapper : operatorChain.getAllOperators(true)) {
+				operatorWrapper.getStreamOperator().open();
 			}
+
+			headOperator.processElement(new StreamRecord<>(1));
+			headOperator.processElement(new StreamRecord<>(2));
+			headOperator.processElement(new StreamRecord<>(3));
+
+			assertThat(sink1Results, contains("First: 1", "First: 2", "First: 3"));
+			assertThat(sink2Results, contains("Second: 1", "Second: 2", "Second: 3"));
 		}
+	}
 
-		headOperator.processElement(new StreamRecord<>(1));
-		headOperator.processElement(new StreamRecord<>(2));
-		headOperator.processElement(new StreamRecord<>(3));
-
-		assertThat(sink1Results, contains("First: 1", "First: 2", "First: 3"));
-		assertThat(sink2Results, contains("Second: 1", "Second: 2", "Second: 3"));
+	private MockEnvironment createMockEnvironment(String taskName) {
+		return new MockEnvironmentBuilder()
+			.setTaskName(taskName)
+			.setManagedMemorySize(3 * 1024 * 1024)
+			.setInputSplitProvider(new MockInputSplitProvider())
+			.setBufferSize(1024)
+			.build();
 	}
 
 	@Test
@@ -189,6 +178,9 @@ public class StreamOperatorChainingTest {
 	 */
 	private void testMultiChainingWithSplit(StreamExecutionEnvironment env) throws Exception {
 
+		// set parallelism to 2 to avoid chaining with source in case when available processors is 1.
+		env.setParallelism(2);
+
 		// the actual elements will not be used
 		DataStream<Integer> input = env.fromElements(1, 2, 3);
 
@@ -197,78 +189,52 @@ public class StreamOperatorChainingTest {
 		sink3Results = new ArrayList<>();
 
 		input = input
-				.map(new MapFunction<Integer, Integer>(){
-					private static final long serialVersionUID = 1L;
+				.map(value -> value);
 
-					@Override
-					public Integer map(Integer value) throws Exception {
-						return value;
-					}
-				});
-
-		SplitStream<Integer> split = input.split(new OutputSelector<Integer>() {
+		OutputTag<Integer> oneOutput = new OutputTag<Integer>("one") {};
+		OutputTag<Integer> otherOutput = new OutputTag<Integer>("other") {};
+		SingleOutputStreamOperator<Object> split = input.process(new ProcessFunction<Integer, Object>() {
 			private static final long serialVersionUID = 1L;
 
 			@Override
-			public Iterable<String> select(Integer value) {
+			public void processElement(
+					Integer value,
+					Context ctx, Collector<Object> out) throws Exception {
 				if (value.equals(1)) {
-					return Collections.singletonList("one");
+					ctx.output(oneOutput, value);
 				} else {
-					return Collections.singletonList("other");
+					ctx.output(otherOutput, value);
 				}
+
 			}
 		});
 
-		split.select("one")
-				.map(new MapFunction<Integer, String>() {
-					private static final long serialVersionUID = 1L;
-
-					@Override
-					public String map(Integer value) throws Exception {
-						return "First 1: " + value;
-					}
-				})
+		split.getSideOutput(oneOutput)
+				.map(value -> "First 1: " + value)
 				.addSink(new SinkFunction<String>() {
-					private static final long serialVersionUID = 1L;
 
 					@Override
-					public void invoke(String value) throws Exception {
+					public void invoke(String value, Context ctx) throws Exception {
 						sink1Results.add(value);
 					}
 				});
 
-		split.select("one")
-				.map(new MapFunction<Integer, String>() {
-					private static final long serialVersionUID = 1L;
-
-					@Override
-					public String map(Integer value) throws Exception {
-						return "First 2: " + value;
-					}
-				})
+		split.getSideOutput(oneOutput)
+				.map(value -> "First 2: " + value)
 				.addSink(new SinkFunction<String>() {
-					private static final long serialVersionUID = 1L;
 
 					@Override
-					public void invoke(String value) throws Exception {
+					public void invoke(String value, Context ctx) throws Exception {
 						sink2Results.add(value);
 					}
 				});
 
-		split.select("other")
-				.map(new MapFunction<Integer, String>() {
-					private static final long serialVersionUID = 1L;
-
-					@Override
-					public String map(Integer value) throws Exception {
-						return "Second: " + value;
-					}
-				})
+		split.getSideOutput(otherOutput)
+				.map(value -> "Second: " + value)
 				.addSink(new SinkFunction<String>() {
-					private static final long serialVersionUID = 1L;
 
 					@Override
-					public void invoke(String value) throws Exception {
+					public void invoke(String value, Context ctx) throws Exception {
 						sink3Results.add(value);
 					}
 				});
@@ -287,41 +253,42 @@ public class StreamOperatorChainingTest {
 		StreamMap<Integer, Integer> headOperator =
 				streamConfig.getStreamOperator(Thread.currentThread().getContextClassLoader());
 
-		StreamTask<Integer, StreamMap<Integer, Integer>> mockTask =
-				createMockTask(streamConfig, chainedVertex.getName());
+		try (MockEnvironment environment = createMockEnvironment(chainedVertex.getName())) {
+			StreamTask<Integer, StreamMap<Integer, Integer>> mockTask = createMockTask(streamConfig, environment);
+			OperatorChain<Integer, StreamMap<Integer, Integer>> operatorChain = createOperatorChain(streamConfig, environment, mockTask);
 
-		OperatorChain<Integer, StreamMap<Integer, Integer>> operatorChain = new OperatorChain<>(mockTask);
+			headOperator.setup(mockTask, streamConfig, operatorChain.getMainOperatorOutput());
 
-		headOperator.setup(mockTask, streamConfig, operatorChain.getChainEntryPoint());
-
-		for (StreamOperator<?> operator : operatorChain.getAllOperators()) {
-			if (operator != null) {
-				operator.open();
+			for (StreamOperatorWrapper<?, ?> operatorWrapper : operatorChain.getAllOperators(true)) {
+				operatorWrapper.getStreamOperator().open();
 			}
+
+			headOperator.processElement(new StreamRecord<>(1));
+			headOperator.processElement(new StreamRecord<>(2));
+			headOperator.processElement(new StreamRecord<>(3));
+
+			assertThat(sink1Results, contains("First 1: 1"));
+			assertThat(sink2Results, contains("First 2: 1"));
+			assertThat(sink3Results, contains("Second: 2", "Second: 3"));
 		}
-
-		headOperator.processElement(new StreamRecord<>(1));
-		headOperator.processElement(new StreamRecord<>(2));
-		headOperator.processElement(new StreamRecord<>(3));
-
-		assertThat(sink1Results, contains("First 1: 1"));
-		assertThat(sink2Results, contains("First 2: 1"));
-		assertThat(sink3Results, contains("Second: 2", "Second: 3"));
 	}
 
-	private <IN, OT extends StreamOperator<IN>> StreamTask<IN, OT> createMockTask(StreamConfig streamConfig, String taskName) {
-		final Object checkpointLock = new Object();
-		final Environment env = new MockEnvironment(taskName, 3 * 1024 * 1024, new MockInputSplitProvider(), 1024);
+	private <IN, OT extends StreamOperator<IN>> OperatorChain<IN, OT> createOperatorChain(
+			StreamConfig streamConfig,
+			Environment environment,
+			StreamTask<IN, OT> task) {
+		return new OperatorChain<>(task, StreamTask.createRecordWriterDelegate(streamConfig, environment));
+	}
 
-		@SuppressWarnings("unchecked")
-		StreamTask<IN, OT> mockTask = mock(StreamTask.class);
-		when(mockTask.getName()).thenReturn("Mock Task");
-		when(mockTask.getCheckpointLock()).thenReturn(checkpointLock);
-		when(mockTask.getConfiguration()).thenReturn(streamConfig);
-		when(mockTask.getEnvironment()).thenReturn(env);
-		when(mockTask.getExecutionConfig()).thenReturn(new ExecutionConfig().enableObjectReuse());
+	private <IN, OT extends StreamOperator<IN>> StreamTask<IN, OT> createMockTask(
+			StreamConfig streamConfig,
+			Environment environment) throws Exception {
 
-		return mockTask;
+		//noinspection unchecked
+		return new MockStreamTaskBuilder(environment)
+			.setConfig(streamConfig)
+			.setExecutionConfig(new ExecutionConfig().enableObjectReuse())
+			.build();
 	}
 
 }

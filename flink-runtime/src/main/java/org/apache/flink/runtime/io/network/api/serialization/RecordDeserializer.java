@@ -16,21 +16,23 @@
  * limitations under the License.
  */
 
-
 package org.apache.flink.runtime.io.network.api.serialization;
 
-import java.io.IOException;
-
 import org.apache.flink.core.io.IOReadableWritable;
-import org.apache.flink.core.memory.MemorySegment;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
+import org.apache.flink.util.CloseableIterator;
+
+import java.io.IOException;
 
 /**
  * Interface for turning sequences of memory segments into records.
  */
 public interface RecordDeserializer<T extends IOReadableWritable> {
 
-	public static enum DeserializationResult {
+	/**
+	 * Status of the deserialization result.
+	 */
+	enum DeserializationResult {
 		PARTIAL_RECORD(false, true),
 		INTERMEDIATE_RECORD_FROM_BUFFER(true, false),
 		LAST_RECORD_FROM_BUFFER(true, true);
@@ -52,16 +54,22 @@ public interface RecordDeserializer<T extends IOReadableWritable> {
 			return this.isBufferConsumed;
 		}
 	}
-	
-	DeserializationResult getNextRecord(T target) throws IOException;
 
-	void setNextMemorySegment(MemorySegment segment, int numBytes) throws IOException;
+	DeserializationResult getNextRecord(T target) throws IOException;
 
 	void setNextBuffer(Buffer buffer) throws IOException;
 
 	Buffer getCurrentBuffer();
 
 	void clear();
-	
+
 	boolean hasUnfinishedData();
+
+	/**
+	 * Gets the unconsumed buffer which needs to be persisted in unaligned checkpoint scenario.
+	 *
+	 * <p>Note that the unconsumed buffer might be null if the whole buffer was already consumed
+	 * before and there are no partial length or data remained in the end of buffer.
+	 */
+	CloseableIterator<Buffer> getUnconsumedBuffer() throws IOException;
 }

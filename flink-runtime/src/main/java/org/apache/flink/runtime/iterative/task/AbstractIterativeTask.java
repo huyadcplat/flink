@@ -21,11 +21,6 @@ package org.apache.flink.runtime.iterative.task;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.TaskInfo;
 import org.apache.flink.api.common.accumulators.Accumulator;
-import org.apache.flink.core.fs.Path;
-import org.apache.flink.metrics.MetricGroup;
-import org.apache.flink.runtime.operators.BatchTask;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.apache.flink.api.common.aggregators.Aggregator;
 import org.apache.flink.api.common.aggregators.LongSumAggregator;
 import org.apache.flink.api.common.functions.Function;
@@ -33,8 +28,11 @@ import org.apache.flink.api.common.functions.IterationRuntimeContext;
 import org.apache.flink.api.common.operators.util.JoinHashMap;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerFactory;
+import org.apache.flink.core.fs.Path;
 import org.apache.flink.core.memory.DataOutputView;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.execution.Environment;
+import org.apache.flink.runtime.externalresource.ExternalResourceInfoProvider;
 import org.apache.flink.runtime.io.network.api.reader.MutableReader;
 import org.apache.flink.runtime.iterative.concurrent.BlockingBackChannel;
 import org.apache.flink.runtime.iterative.concurrent.BlockingBackChannelBroker;
@@ -45,6 +43,7 @@ import org.apache.flink.runtime.iterative.convergence.WorksetEmptyConvergenceCri
 import org.apache.flink.runtime.iterative.io.SolutionSetObjectsUpdateOutputCollector;
 import org.apache.flink.runtime.iterative.io.SolutionSetUpdateOutputCollector;
 import org.apache.flink.runtime.iterative.io.WorksetUpdateOutputCollector;
+import org.apache.flink.runtime.operators.BatchTask;
 import org.apache.flink.runtime.operators.Driver;
 import org.apache.flink.runtime.operators.ResettableDriver;
 import org.apache.flink.runtime.operators.hash.CompactingHashTable;
@@ -54,6 +53,10 @@ import org.apache.flink.types.Value;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.InstantiationUtil;
 import org.apache.flink.util.MutableObjectIterator;
+import org.apache.flink.util.UserCodeClassLoader;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -64,10 +67,10 @@ import java.util.concurrent.Future;
  * The abstract base class for all tasks able to participate in an iteration.
  */
 public abstract class AbstractIterativeTask<S extends Function, OT> extends BatchTask<S, OT>
-		implements Terminable
-{
+		implements Terminable {
+
 	private static final Logger log = LoggerFactory.getLogger(AbstractIterativeTask.class);
-	
+
 	protected LongSumAggregator worksetAggregator;
 
 	protected BlockingBackChannel worksetBackChannel;
@@ -77,15 +80,25 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 	protected boolean isWorksetUpdate;
 
 	protected boolean isSolutionSetUpdate;
-	
 
 	private RuntimeAggregatorRegistry iterationAggregators;
 
 	private String brokerKey;
 
 	private int superstepNum = 1;
-	
+
 	private volatile boolean terminationRequested;
+
+	// --------------------------------------------------------------------------------------------
+
+	/**
+	 * Create an Invokable task and set its environment.
+	 *
+	 * @param environment The environment assigned to this invokable.
+	 */
+	public AbstractIterativeTask(Environment environment) {
+		super(environment);
+	}
 
 	// --------------------------------------------------------------------------------------------
 	// Main life cycle methods that implement the iterative behavior
@@ -98,14 +111,14 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 		// check if the driver is resettable
 		if (this.driver instanceof ResettableDriver) {
 			final ResettableDriver<?, ?> resDriver = (ResettableDriver<?, ?>) this.driver;
-			// make sure that the according inputs are not reseted
+			// make sure that the according inputs are not reset
 			for (int i = 0; i < resDriver.getNumberOfInputs(); i++) {
 				if (resDriver.isInputResettable(i)) {
 					excludeFromReset(i);
 				}
 			}
 		}
-		
+
 		TaskConfig config = getLastTasksConfig();
 		isWorksetIteration = config.getIsWorksetIteration();
 		isWorksetUpdate = config.getIsWorksetUpdate();
@@ -134,7 +147,7 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 		} else {
 			reinstantiateDriver();
 			resetAllInputs();
-			
+
 			// re-read the iterative broadcast variables
 			for (int i : this.iterativeBroadcastInputs) {
 				final String name = getTaskConfig().getBroadcastInputName(i);
@@ -144,7 +157,7 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 
 		// call the parent to execute the superstep
 		super.run();
-		
+
 		// release the iterative broadcast variables
 		for (int i : this.iterativeBroadcastInputs) {
 			final String name = getTaskConfig().getBroadcastInputName(i);
@@ -172,8 +185,9 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 	@Override
 	public DistributedRuntimeUDFContext createRuntimeContext(MetricGroup metrics) {
 		Environment env = getEnvironment();
-		return new IterativeRuntimeUdfContext(env.getTaskInfo(), getUserCodeClassLoader(),
-				getExecutionConfig(), env.getDistributedCacheEntries(), this.accumulatorMap, metrics);
+
+		return new IterativeRuntimeUdfContext(env.getTaskInfo(), env.getUserCodeClassLoader(),
+				getExecutionConfig(), env.getDistributedCacheEntries(), this.accumulatorMap, metrics, env.getExternalResourceInfoProvider());
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -244,8 +258,9 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 					@SuppressWarnings("unchecked")
 					MutableObjectIterator<Object> inIter = (MutableObjectIterator<Object>) this.inputIterators[inputNum];
 					Object o = this.inputSerializers[inputNum].getSerializer().createInstance();
-					while ((o = inIter.next(o)) != null);
-					
+					while ((o = inIter.next(o)) != null) {
+					}
+
 					if (!reader.isFinished()) {
 						// also reset the end-of-superstep state
 						reader.startNextSuperstep();
@@ -253,17 +268,17 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 				}
 			}
 		}
-		
+
 		for (int inputNum : this.iterativeBroadcastInputs) {
 			MutableReader<?> reader = this.broadcastInputReaders[inputNum];
 
 			if (!reader.isFinished()) {
-				
+
 				// sanity check that the BC input is at the end of the superstep
 				if (!reader.hasReachedEndOfSuperstep()) {
 					throw new IllegalStateException("An iterative broadcast input has not been fully consumed.");
 				}
-				
+
 				reader.startNextSuperstep();
 			}
 		}
@@ -291,11 +306,11 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 
 	/**
 	 * Creates a new {@link WorksetUpdateOutputCollector}.
-	 * <p>
-	 * This collector is used by {@link IterationIntermediateTask} or {@link IterationTailTask} to update the
+	 *
+	 * <p>This collector is used by {@link IterationIntermediateTask} or {@link IterationTailTask} to update the
 	 * workset.
-	 * <p>
-	 * If a non-null delegate is given, the new {@link Collector} will write to the solution set and also call
+	 *
+	 * <p>If a non-null delegate is given, the new {@link Collector} will write to the solution set and also call
 	 * collect(T) of the delegate.
 	 *
 	 * @param delegate null -OR- the delegate on which to call collect() by the newly created collector
@@ -313,13 +328,13 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 
 	/**
 	 * Creates a new solution set update output collector.
-	 * <p>
-	 * This collector is used by {@link IterationIntermediateTask} or {@link IterationTailTask} to update the
+	 *
+	 * <p>This collector is used by {@link IterationIntermediateTask} or {@link IterationTailTask} to update the
 	 * solution set of workset iterations. Depending on the task configuration, either a fast (non-probing)
 	 * {@link org.apache.flink.runtime.iterative.io.SolutionSetFastUpdateOutputCollector} or normal (re-probing)
 	 * {@link SolutionSetUpdateOutputCollector} is created.
-	 * <p>
-	 * If a non-null delegate is given, the new {@link Collector} will write back to the solution set and also call
+	 *
+	 * <p>If a non-null delegate is given, the new {@link Collector} will write back to the solution set and also call
 	 * collect(T) of the delegate.
 	 *
 	 * @param delegate null -OR- a delegate collector to be called by the newly created collector
@@ -328,7 +343,7 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 	 */
 	protected Collector<OT> createSolutionSetUpdateOutputCollector(Collector<OT> delegate) {
 		Broker<Object> solutionSetBroker = SolutionSetBroker.instance();
-		
+
 		Object ss = solutionSetBroker.get(brokerKey());
 		if (ss instanceof CompactingHashTable) {
 			@SuppressWarnings("unchecked")
@@ -362,9 +377,10 @@ public abstract class AbstractIterativeTask<S extends Function, OT> extends Batc
 
 	private class IterativeRuntimeUdfContext extends DistributedRuntimeUDFContext implements IterationRuntimeContext {
 
-		public IterativeRuntimeUdfContext(TaskInfo taskInfo, ClassLoader userCodeClassLoader, ExecutionConfig executionConfig,
-											Map<String, Future<Path>> cpTasks, Map<String, Accumulator<?,?>> accumulatorMap, MetricGroup metrics) {
-			super(taskInfo, userCodeClassLoader, executionConfig, cpTasks, accumulatorMap, metrics);
+		public IterativeRuntimeUdfContext(TaskInfo taskInfo, UserCodeClassLoader userCodeClassLoader, ExecutionConfig executionConfig,
+											Map<String, Future<Path>> cpTasks, Map<String, Accumulator<?, ?>> accumulatorMap,
+											MetricGroup metrics, ExternalResourceInfoProvider externalResourceInfoProvider) {
+			super(taskInfo, userCodeClassLoader, executionConfig, cpTasks, accumulatorMap, metrics, externalResourceInfoProvider);
 		}
 
 		@Override

@@ -36,7 +36,7 @@ import org.apache.flink.util.InstantiationUtil;
 
 @Internal
 public final class PojoComparator<T> extends CompositeTypeComparator<T> implements java.io.Serializable {
-	
+
 	private static final long serialVersionUID = 1L;
 
 	// Reflection fields for the comp fields
@@ -70,6 +70,10 @@ public final class PojoComparator<T> extends CompositeTypeComparator<T> implemen
 		int nKeyLen = 0;
 		boolean inverted = false;
 
+		for (Field keyField : keyFields) {
+			keyField.setAccessible(true);
+		}
+
 		for (int i = 0; i < this.comparators.length; i++) {
 			TypeComparator<?> k = this.comparators[i];
 			if(k == null) {
@@ -86,7 +90,7 @@ public final class PojoComparator<T> extends CompositeTypeComparator<T> implemen
 					inverted = k.invertNormalizedKey();
 				}
 				else if (k.invertNormalizedKey() != inverted) {
-					// if a successor does not agree on the invertion direction, it cannot be part of the normalized key
+					// if a successor does not agree on the inversion direction, it cannot be part of the normalized key
 					break;
 				}
 
@@ -170,7 +174,7 @@ public final class PojoComparator<T> extends CompositeTypeComparator<T> implemen
 			}
 		}
 	}
-	
+
 	/**
 	 * This method is handling the IllegalAccess exceptions of Field.get()
 	 */
@@ -180,7 +184,7 @@ public final class PojoComparator<T> extends CompositeTypeComparator<T> implemen
 		} catch (NullPointerException npex) {
 			throw new NullKeyFieldException("Unable to access field "+field+" on object "+object);
 		} catch (IllegalAccessException iaex) {
-			throw new RuntimeException("This should not happen since we call setAccesssible(true) in PojoTypeInfo."
+			throw new RuntimeException("This should not happen since we call setAccesssible(true) in the ctor."
 			+ " fields: " + field + " obj: " + object);
 		}
 		return object;
@@ -195,7 +199,7 @@ public final class PojoComparator<T> extends CompositeTypeComparator<T> implemen
 			try {
 				code += this.comparators[i].hash(accessField(keyFields[i], value));
 			}catch(NullPointerException npe) {
-				throw new RuntimeException("A NullPointerException occured while accessing a key field in a POJO. " +
+				throw new RuntimeException("A NullPointerException occurred while accessing a key field in a POJO. " +
 						"Most likely, the value grouped/joined on is null. Field name: "+keyFields[i].getName(), npe);
 			}
 		}
@@ -286,7 +290,7 @@ public final class PojoComparator<T> extends CompositeTypeComparator<T> implemen
 	@Override
 	public void putNormalizedKey(T value, MemorySegment target, int offset, int numBytes) {
 		int i = 0;
-		for (; i < this.numLeadingNormalizableKeys & numBytes > 0; i++)
+		for (; i < this.numLeadingNormalizableKeys && numBytes > 0; i++)
 		{
 			int len = this.normalizedKeyLengths[i];
 			len = numBytes >= len ? len : numBytes;

@@ -29,16 +29,18 @@ import org.apache.flink.test.util.TestBaseUtils;
 import org.apache.flink.types.IntValue;
 import org.apache.flink.types.LongValue;
 import org.apache.flink.types.NullValue;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 
-public class EdgeTargetDegreesTest
-extends AsmTestBase {
+/**
+ * Tests for {@link EdgeTargetDegrees}.
+ */
+public class EdgeTargetDegreesTest extends AsmTestBase {
 
 	@Test
-	public void testWithSimpleGraph()
-			throws Exception {
+	public void testWithSimpleGraph() throws Exception {
 		String expectedResult =
 			"(0,1,((null),(3,0,3)))\n" +
 			"(0,2,((null),(3,2,1)))\n" +
@@ -49,16 +51,31 @@ extends AsmTestBase {
 			"(5,3,((null),(4,2,2)))";
 
 		DataSet<Edge<IntValue, Tuple2<NullValue, Degrees>>> targetDegrees = directedSimpleGraph
-				.run(new EdgeTargetDegrees<IntValue, NullValue, NullValue>());
+				.run(new EdgeTargetDegrees<>());
 
 		TestBaseUtils.compareResultAsText(targetDegrees.collect(), expectedResult);
 	}
 
 	@Test
-	public void testWithRMatGraph()
-			throws Exception {
+	public void testWithEmptyGraphWithVertices() throws Exception {
+		DataSet<Edge<LongValue, Tuple2<NullValue, Degrees>>> targetDegrees = emptyGraphWithVertices
+			.run(new EdgeTargetDegrees<>());
+
+		assertEquals(0, targetDegrees.collect().size());
+	}
+
+	@Test
+	public void testWithEmptyGraphWithoutVertices() throws Exception {
+		DataSet<Edge<LongValue, Tuple2<NullValue, Degrees>>> targetDegrees = emptyGraphWithoutVertices
+			.run(new EdgeTargetDegrees<>());
+
+		assertEquals(0, targetDegrees.collect().size());
+	}
+
+	@Test
+	public void testWithRMatGraph() throws Exception {
 		DataSet<Edge<LongValue, Tuple2<NullValue, Degrees>>> targetDegrees = directedRMatGraph(10, 16)
-			.run(new EdgeTargetDegrees<LongValue, NullValue, NullValue>());
+			.run(new EdgeTargetDegrees<>());
 
 		Checksum checksum = new ChecksumHashCode<Edge<LongValue, Tuple2<NullValue, Degrees>>>()
 			.run(targetDegrees)

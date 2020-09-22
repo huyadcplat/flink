@@ -15,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.test.state.operator.restore.keyed;
 
 import org.apache.flink.api.common.functions.RichMapFunction;
@@ -24,7 +25,7 @@ import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 import org.apache.flink.streaming.api.CheckpointingMode;
@@ -37,6 +38,7 @@ import org.apache.flink.streaming.api.functions.windowing.RichWindowFunction;
 import org.apache.flink.streaming.api.windowing.windows.GlobalWindow;
 import org.apache.flink.test.state.operator.restore.ExecutionMode;
 import org.apache.flink.util.Collector;
+
 import org.junit.Assert;
 
 import java.util.Arrays;
@@ -44,9 +46,10 @@ import java.util.Iterator;
 import java.util.List;
 
 /**
- * Savepoint generator to create the job used by the {@link KeyedComplexChainTest}.
+ * Savepoint generator to create the savepoint used by the {@link AbstractKeyedOperatorRestoreTestBase}.
+ * Switch to specific version branches and run this job to create savepoints of different Flink versions.
  *
- * The job should be cancelled manually through the REST API using the cancel-with-savepoint operation.
+ * <p>The job should be cancelled manually through the REST API using the cancel-with-savepoint operation.
  */
 public class KeyedJob {
 
@@ -56,7 +59,7 @@ public class KeyedJob {
 		String savepointsPath = pt.getRequired("savepoint-path");
 
 		Configuration config = new Configuration();
-		config.setString(ConfigConstants.SAVEPOINT_DIRECTORY_KEY, savepointsPath);
+		config.setString(CheckpointingOptions.SAVEPOINT_DIRECTORY, savepointsPath);
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(config);
 		env.enableCheckpointing(500, CheckpointingMode.EXACTLY_ONCE);
@@ -95,11 +98,8 @@ public class KeyedJob {
 	public static SingleOutputStreamOperator<Integer> createFirstStatefulMap(ExecutionMode mode, DataStream<Integer> input) {
 		SingleOutputStreamOperator<Integer> map = input
 			.map(new StatefulStringStoringMap(mode, "first"))
-			.setParallelism(4);
-
-		if (mode == ExecutionMode.MIGRATE || mode == ExecutionMode.RESTORE) {
-			map.uid("first");
-		}
+			.setParallelism(4)
+			.uid("first");
 
 		return map;
 	}
@@ -107,11 +107,8 @@ public class KeyedJob {
 	public static SingleOutputStreamOperator<Integer> createSecondStatefulMap(ExecutionMode mode, DataStream<Integer> input) {
 		SingleOutputStreamOperator<Integer> map = input
 			.map(new StatefulStringStoringMap(mode, "second"))
-			.setParallelism(4);
-
-		if (mode == ExecutionMode.MIGRATE || mode == ExecutionMode.RESTORE) {
-			map.uid("second");
-		}
+			.setParallelism(4)
+			.uid("second");
 
 		return map;
 	}
@@ -233,9 +230,5 @@ public class KeyedJob {
 					Assert.assertEquals(valueToStore + getRuntimeContext().getIndexOfThisSubtask(), value);
 			}
 		}
-	}
-
-
-	private KeyedJob() {
 	}
 }

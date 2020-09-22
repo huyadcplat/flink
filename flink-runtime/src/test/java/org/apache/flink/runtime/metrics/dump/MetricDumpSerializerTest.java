@@ -15,6 +15,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.flink.runtime.metrics.dump;
 
 import org.apache.flink.api.java.tuple.Tuple2;
@@ -23,7 +24,8 @@ import org.apache.flink.metrics.Gauge;
 import org.apache.flink.metrics.Histogram;
 import org.apache.flink.metrics.Meter;
 import org.apache.flink.metrics.SimpleCounter;
-import org.apache.flink.runtime.metrics.util.TestingHistogram;
+import org.apache.flink.metrics.util.TestHistogram;
+
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -43,7 +45,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-
+/**
+ * Tests for the {@link MetricDumpSerialization}.
+ */
 public class MetricDumpSerializerTest {
 	@Test
 	public void testNullGaugeHandling() throws IOException {
@@ -51,22 +55,25 @@ public class MetricDumpSerializerTest {
 		MetricDumpSerialization.MetricDumpDeserializer deserializer = new MetricDumpSerialization.MetricDumpDeserializer();
 
 		Map<Gauge<?>, Tuple2<QueryScopeInfo, String>> gauges = new HashMap<>();
-		
+
 		gauges.put(new Gauge<Object>() {
 			@Override
 			public Object getValue() {
 				return null;
 			}
 		}, new Tuple2<QueryScopeInfo, String>(new QueryScopeInfo.JobManagerQueryScopeInfo("A"), "g"));
-		
+
 		MetricDumpSerialization.MetricSerializationResult output = serializer.serialize(
-			Collections.<Counter, Tuple2<QueryScopeInfo,String>>emptyMap(),
+			Collections.<Counter, Tuple2<QueryScopeInfo, String>>emptyMap(),
 			gauges,
 			Collections.<Histogram, Tuple2<QueryScopeInfo, String>>emptyMap(),
 			Collections.<Meter, Tuple2<QueryScopeInfo, String>>emptyMap());
-		
+
 		// no metrics should be serialized
-		Assert.assertEquals(0, output.serializedMetrics.length);
+		Assert.assertEquals(0, output.serializedCounters.length);
+		Assert.assertEquals(0, output.serializedGauges.length);
+		Assert.assertEquals(0, output.serializedHistograms.length);
+		Assert.assertEquals(0, output.serializedMeters.length);
 
 		List<MetricDump> deserialized = deserializer.deserialize(output);
 		Assert.assertEquals(0, deserialized.size());
@@ -80,10 +87,10 @@ public class MetricDumpSerializerTest {
 		final ObjectOutputStream oos = new ObjectOutputStream(bos);
 
 		oos.writeObject(serializer.serialize(
-			new HashMap<Counter, Tuple2<QueryScopeInfo,String>>(),
-			new HashMap<Gauge<?>, Tuple2<QueryScopeInfo,String>>(),
-			new HashMap<Histogram, Tuple2<QueryScopeInfo,String>>(),
-			new HashMap<Meter, Tuple2<QueryScopeInfo,String>>()));
+			new HashMap<Counter, Tuple2<QueryScopeInfo, String>>(),
+			new HashMap<Gauge<?>, Tuple2<QueryScopeInfo, String>>(),
+			new HashMap<Histogram, Tuple2<QueryScopeInfo, String>>(),
+			new HashMap<Meter, Tuple2<QueryScopeInfo, String>>()));
 	}
 
 	@Test
@@ -109,7 +116,7 @@ public class MetricDumpSerializerTest {
 			}
 		};
 
-		Histogram h1 = new TestingHistogram();
+		Histogram h1 = new TestHistogram();
 
 		Meter m1 = new Meter() {
 			@Override
@@ -137,7 +144,8 @@ public class MetricDumpSerializerTest {
 		gauges.put(g1, new Tuple2<QueryScopeInfo, String>(new QueryScopeInfo.TaskQueryScopeInfo("jid", "vid", 2, "D"), "g1"));
 		histograms.put(h1, new Tuple2<QueryScopeInfo, String>(new QueryScopeInfo.OperatorQueryScopeInfo("jid", "vid", 2, "opname", "E"), "h1"));
 
-		MetricDumpSerialization.MetricSerializationResult serialized = serializer.serialize(counters, gauges, histograms, meters);
+		MetricDumpSerialization.MetricSerializationResult serialized = serializer.serialize(
+			counters, gauges, histograms, meters);
 		List<MetricDump> deserialized = deserializer.deserialize(serialized);
 
 		// ===== Counters ==============================================================================================

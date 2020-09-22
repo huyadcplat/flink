@@ -21,13 +21,19 @@ package org.apache.flink.api.java.io;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.io.GenericCsvInputFormat;
 import org.apache.flink.core.fs.FileInputSplit;
+import org.apache.flink.core.fs.Path;
 import org.apache.flink.types.parser.FieldParser;
 import org.apache.flink.util.Preconditions;
-
-import java.io.IOException;
-import org.apache.flink.core.fs.Path;
 import org.apache.flink.util.StringUtils;
 
+import java.io.IOException;
+import java.util.Arrays;
+
+/**
+ * InputFormat that reads csv files.
+ *
+ * @param <OUT>
+ */
 @Internal
 public abstract class CsvInputFormat<OUT> extends GenericCsvInputFormat<OUT> {
 
@@ -38,7 +44,7 @@ public abstract class CsvInputFormat<OUT> extends GenericCsvInputFormat<OUT> {
 	public static final String DEFAULT_FIELD_DELIMITER = ",";
 
 	protected transient Object[] parsedValues;
-	
+
 	protected CsvInputFormat(Path filePath) {
 		super(filePath);
 	}
@@ -50,11 +56,6 @@ public abstract class CsvInputFormat<OUT> extends GenericCsvInputFormat<OUT> {
 		@SuppressWarnings("unchecked")
 		FieldParser<Object>[] fieldParsers = (FieldParser<Object>[]) getFieldParsers();
 
-		//throw exception if no field parsers are available
-		if (fieldParsers.length == 0) {
-			throw new IOException("CsvInputFormat.open(FileInputSplit split) - no field parsers to parse input");
-		}
-
 		// create the value holders
 		this.parsedValues = new Object[fieldParsers.length];
 		for (int i = 0; i < fieldParsers.length; i++) {
@@ -63,7 +64,7 @@ public abstract class CsvInputFormat<OUT> extends GenericCsvInputFormat<OUT> {
 
 		// left to right evaluation makes access [0] okay
 		// this marker is used to fasten up readRecord, so that it doesn't have to check each call if the line ending is set to default
-		if (this.getDelimiter().length == 1 && this.getDelimiter()[0] == '\n' ) {
+		if (this.getDelimiter().length == 1 && this.getDelimiter()[0] == '\n') {
 			this.lineDelimiterIsLinebreak = true;
 		}
 
@@ -123,7 +124,7 @@ public abstract class CsvInputFormat<OUT> extends GenericCsvInputFormat<OUT> {
 
 	protected static boolean[] createDefaultMask(int size) {
 		boolean[] includedMask = new boolean[size];
-		for (int x=0; x<includedMask.length; x++) {
+		for (int x = 0; x < includedMask.length; x++) {
 			includedMask[x] = true;
 		}
 		return includedMask;
@@ -152,7 +153,7 @@ public abstract class CsvInputFormat<OUT> extends GenericCsvInputFormat<OUT> {
 
 	@Override
 	public String toString() {
-		return "CSV Input (" + StringUtils.showControlCharacters(String.valueOf(getFieldDelimiter())) + ") " + getFilePath();
+		return "CSV Input (" + StringUtils.showControlCharacters(String.valueOf(getFieldDelimiter())) + ") " + Arrays.toString(getFilePaths());
 	}
-	
+
 }

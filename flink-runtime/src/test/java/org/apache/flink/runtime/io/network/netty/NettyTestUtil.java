@@ -18,26 +18,31 @@
 
 package org.apache.flink.runtime.io.network.netty;
 
-import io.netty.channel.Channel;
-
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.util.NetUtils;
 
-import scala.Tuple2;
+import org.apache.flink.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.flink.shaded.netty4.io.netty.channel.Channel;
+import org.apache.flink.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
+import static junit.framework.TestCase.assertEquals;
+import static org.apache.flink.runtime.io.network.netty.NettyMessage.ErrorResponse;
+import static org.apache.flink.runtime.io.network.netty.NettyMessage.BufferResponse;
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Test utility for Netty server and client setup.
  */
 public class NettyTestUtil {
 
-	static int DEFAULT_SEGMENT_SIZE = 1024;
+	static final int DEFAULT_SEGMENT_SIZE = 1024;
 
 	// ---------------------------------------------------------------------------------------------
 	// NettyServer and NettyClient
@@ -48,6 +53,23 @@ public class NettyTestUtil {
 
 		try {
 			server.init(protocol, bufferPool);
+		}
+		catch (Exception e) {
+			server.shutdown();
+			throw e;
+		}
+
+		return server;
+	}
+
+	static NettyServer initServer(
+			NettyConfig config,
+			NettyBufferPool bufferPool,
+			Function<SSLHandlerFactory, NettyServer.ServerChannelInitializer> channelInitializer) throws Exception {
+		final NettyServer server = new NettyServer(config);
+
+		try {
+			server.init(bufferPool, channelInitializer);
 		}
 		catch (Exception e) {
 			server.shutdown();
@@ -147,31 +169,57 @@ public class NettyTestUtil {
 	}
 
 	// ---------------------------------------------------------------------------------------------
+	// Encoding & Decoding
+	// ---------------------------------------------------------------------------------------------
 
-	static class NettyServerAndClient extends Tuple2<NettyServer, NettyClient> {
+	static <T extends NettyMessage> T encodeAndDecode(T msg, EmbeddedChannel channel) {
+		channel.writeOutbound(msg);
+		ByteBuf encoded = channel.readOutbound();
 
-		private static final long serialVersionUID = 4440278728496341931L;
+		assertTrue(channel.writeInbound(encoded));
 
-		NettyServerAndClient(NettyServer _1, NettyClient _2) {
-			super(_1, _2);
+		return channel.readInbound();
+	}
+
+	// ---------------------------------------------------------------------------------------------
+	// Message Verification
+	// ---------------------------------------------------------------------------------------------
+
+	static void verifyErrorResponse(ErrorResponse expected, ErrorResponse actual) {
+		assertEquals(expected.receiverId, actual.receiverId);
+		assertEquals(expected.cause.getClass(), actual.cause.getClass());
+		assertEquals(expected.cause.getMessage(), actual.cause.getMessage());
+
+		if (expected.receiverId == null) {
+			assertTrue(actual.isFatalError());
+		}
+	}
+
+	static void verifyBufferResponseHeader(BufferResponse expected, BufferResponse actual) {
+		assertEquals(expected.backlog, actual.backlog);
+		assertEquals(expected.sequenceNumber, actual.sequenceNumber);
+		assertEquals(expected.bufferSize, actual.bufferSize);
+		assertEquals(expected.receiverId, actual.receiverId);
+	}
+
+	// ------------------------------------------------------------------------
+
+	static final class NettyServerAndClient {
+
+		private final NettyServer server;
+		private final NettyClient client;
+
+		NettyServerAndClient(NettyServer server, NettyClient client) {
+			this.server = checkNotNull(server);
+			this.client = checkNotNull(client);
 		}
 
 		NettyServer server() {
-			return _1();
+			return server;
 		}
 
 		NettyClient client() {
-			return _2();
-		}
-
-		@Override
-		public boolean canEqual(Object that) {
-			return false;
-		}
-
-		@Override
-		public boolean equals(Object that) {
-			return false;
+			return client;
 		}
 	}
 }

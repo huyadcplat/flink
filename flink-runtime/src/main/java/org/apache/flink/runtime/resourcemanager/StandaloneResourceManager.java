@@ -18,48 +18,64 @@
 
 package org.apache.flink.runtime.resourcemanager;
 
+import org.apache.flink.api.common.time.Time;
 import org.apache.flink.runtime.clusterframework.ApplicationStatus;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
-import org.apache.flink.runtime.clusterframework.types.ResourceProfile;
+import org.apache.flink.runtime.entrypoint.ClusterInformation;
 import org.apache.flink.runtime.heartbeat.HeartbeatServices;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
-import org.apache.flink.runtime.instance.InstanceID;
-import org.apache.flink.runtime.metrics.MetricRegistry;
+import org.apache.flink.runtime.io.network.partition.ResourceManagerPartitionTrackerFactory;
+import org.apache.flink.runtime.metrics.groups.ResourceManagerMetricGroup;
 import org.apache.flink.runtime.resourcemanager.exceptions.ResourceManagerException;
 import org.apache.flink.runtime.resourcemanager.slotmanager.SlotManager;
 import org.apache.flink.runtime.rpc.FatalErrorHandler;
 import org.apache.flink.runtime.rpc.RpcService;
+import org.apache.flink.util.Preconditions;
+
+import javax.annotation.Nullable;
+
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * A standalone implementation of the resource manager. Used when the system is started in
  * standalone mode (via scripts), rather than via a resource framework like YARN or Mesos.
  *
- * This ResourceManager doesn't acquire new resources.
+ * <p>This ResourceManager doesn't acquire new resources.
  */
 public class StandaloneResourceManager extends ResourceManager<ResourceID> {
 
+	/** The duration of the startup period. A duration of zero means there is no startup period. */
+	private final Time startupPeriodTime;
+
 	public StandaloneResourceManager(
 			RpcService rpcService,
-			String resourceManagerEndpointId,
 			ResourceID resourceId,
-			ResourceManagerConfiguration resourceManagerConfiguration,
 			HighAvailabilityServices highAvailabilityServices,
 			HeartbeatServices heartbeatServices,
 			SlotManager slotManager,
-			MetricRegistry metricRegistry,
+			ResourceManagerPartitionTrackerFactory clusterPartitionTrackerFactory,
 			JobLeaderIdService jobLeaderIdService,
-			FatalErrorHandler fatalErrorHandler) {
+			ClusterInformation clusterInformation,
+			FatalErrorHandler fatalErrorHandler,
+			ResourceManagerMetricGroup resourceManagerMetricGroup,
+			Time startupPeriodTime,
+			Time rpcTimeout,
+			Executor ioExecutor) {
 		super(
 			rpcService,
-			resourceManagerEndpointId,
 			resourceId,
-			resourceManagerConfiguration,
 			highAvailabilityServices,
 			heartbeatServices,
 			slotManager,
-			metricRegistry,
+			clusterPartitionTrackerFactory,
 			jobLeaderIdService,
-			fatalErrorHandler);
+			clusterInformation,
+			fatalErrorHandler,
+			resourceManagerMetricGroup,
+			rpcTimeout,
+			ioExecutor);
+		this.startupPeriodTime = Preconditions.checkNotNull(startupPeriodTime);
 	}
 
 	@Override
@@ -68,16 +84,23 @@ public class StandaloneResourceManager extends ResourceManager<ResourceID> {
 	}
 
 	@Override
-	protected void shutDownApplication(ApplicationStatus finalStatus, String optionalDiagnostics) {
+	protected void terminate() {
+		// noop
 	}
 
 	@Override
-	public void startNewWorker(ResourceProfile resourceProfile) {
+	protected void internalDeregisterApplication(ApplicationStatus finalStatus, @Nullable String diagnostics) {
 	}
 
 	@Override
-	public void stopWorker(InstanceID instanceId) {
+	public boolean startNewWorker(WorkerResourceSpec workerResourceSpec) {
+		return false;
+	}
 
+	@Override
+	public boolean stopWorker(ResourceID resourceID) {
+		// standalone resource manager cannot stop workers
+		return false;
 	}
 
 	@Override
@@ -85,4 +108,22 @@ public class StandaloneResourceManager extends ResourceManager<ResourceID> {
 		return resourceID;
 	}
 
+	@Override
+	protected void onLeadership() {
+		startStartupPeriod();
+	}
+
+	private void startStartupPeriod() {
+		setFailUnfulfillableRequest(false);
+
+		final long startupPeriodMillis = startupPeriodTime.toMilliseconds();
+
+		if (startupPeriodMillis > 0) {
+			scheduleRunAsync(
+				() -> setFailUnfulfillableRequest(true),
+				startupPeriodMillis,
+				TimeUnit.MILLISECONDS
+			);
+		}
+	}
 }

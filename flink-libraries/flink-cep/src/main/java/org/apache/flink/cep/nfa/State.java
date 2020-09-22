@@ -20,18 +20,15 @@ package org.apache.flink.cep.nfa;
 
 import org.apache.flink.cep.pattern.conditions.IterativeCondition;
 
-import java.io.IOException;
-import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.List;
 import java.util.Objects;
 
 /**
  * Represents a state of the {@link NFA}.
- * <p>
- * Each state is identified by a name and a state type. Furthermore, it contains a collection of
+ *
+ * <p>Each state is identified by a name and a state type. Furthermore, it contains a collection of
  * state transitions. The state transitions describe under which conditions it is possible to enter
  * a new state.
  *
@@ -59,7 +56,9 @@ public class State<T> implements Serializable {
 		return stateType == StateType.Final;
 	}
 
-	public boolean isStart() { return stateType == StateType.Start; }
+	public boolean isStart() {
+		return stateType == StateType.Start;
+	}
 
 	public String getName() {
 		return name;
@@ -84,7 +83,7 @@ public class State<T> implements Serializable {
 		addStateTransition(StateTransitionAction.IGNORE, this, condition);
 	}
 
-	public void addIgnore(final State<T> targetState,final IterativeCondition<T> condition) {
+	public void addIgnore(final State<T> targetState, final IterativeCondition<T> condition) {
 		addStateTransition(StateTransitionAction.IGNORE, targetState, condition);
 	}
 
@@ -104,7 +103,7 @@ public class State<T> implements Serializable {
 	public boolean equals(Object obj) {
 		if (obj instanceof State) {
 			@SuppressWarnings("unchecked")
-			State<T> other = (State<T>)obj;
+			State<T> other = (State<T>) obj;
 
 			return name.equals(other.name) &&
 				stateType == other.stateType &&
@@ -144,22 +143,5 @@ public class State<T> implements Serializable {
 		Final, // the state is a final state for the NFA
 		Normal, // the state is neither a start nor a final state
 		Stop
-	}
-
-	////////////////			Backwards Compatibility			////////////////////
-
-	private void readObject(ObjectInputStream ois) throws IOException, ClassNotFoundException {
-		ois.defaultReadObject();
-
-		//Backward compatibility. Previous version of StateTransition did not have source state
-		if (!stateTransitions.isEmpty() && stateTransitions.iterator().next().getSourceState() == null) {
-			final List<StateTransition<T>> tmp = new ArrayList<>();
-			tmp.addAll(this.stateTransitions);
-
-			this.stateTransitions.clear();
-			for (StateTransition<T> transition : tmp) {
-				addStateTransition(transition.getAction(), transition.getTargetState(), transition.getCondition());
-			}
-		}
 	}
 }

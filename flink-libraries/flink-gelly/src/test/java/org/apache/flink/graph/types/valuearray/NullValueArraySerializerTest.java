@@ -18,14 +18,13 @@
 
 package org.apache.flink.graph.types.valuearray;
 
-import org.apache.flink.api.common.typeutils.SerializerTestBase;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.types.NullValue;
 
 /**
  * A test for the {@link NullValueArraySerializer}.
  */
-public class NullValueArraySerializerTest extends SerializerTestBase<NullValueArray> {
+public class NullValueArraySerializerTest extends ValueArraySerializerTestBase<NullValueArray> {
 
 	@Override
 	protected TypeSerializer<NullValueArray> createSerializer() {
@@ -58,7 +57,7 @@ public class NullValueArraySerializerTest extends SerializerTestBase<NullValueAr
 
 		NullValueArray nva3 = new NullValueArray();
 		nva3.addAll(nva2);
-		for (int i = 0 ; i < 100 ; i++) {
+		for (int i = 0; i < 100; i++) {
 			nva3.add(nv);
 		}
 		nva3.addAll(nva3);

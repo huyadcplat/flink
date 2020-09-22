@@ -19,12 +19,16 @@
 package org.apache.flink.cep.nfa;
 
 import org.apache.flink.util.TestLogger;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+/**
+ * Tests for {@link DeweyNumber}.
+ */
 public class DeweyNumberTest extends TestLogger {
 
 	@Test
@@ -50,5 +54,10 @@ public class DeweyNumberTest extends TestLogger {
 		assertFalse(increaseAddStage.isCompatibleWith(startAddStage));
 		assertFalse(startAddStage.isCompatibleWith(increaseAddStage));
 		assertFalse(startAddStageIncreased.isCompatibleWith(startAddStageIncreasedAddStage));
+	}
+
+	@Test(expected = IllegalArgumentException.class)
+	public void testZeroSplitsDeweyNumber() {
+		DeweyNumber.fromString(".");
 	}
 }

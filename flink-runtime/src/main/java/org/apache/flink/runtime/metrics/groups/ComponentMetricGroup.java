@@ -21,13 +21,10 @@ package org.apache.flink.runtime.metrics.groups;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.runtime.metrics.MetricRegistry;
 
-import java.util.HashMap;
-import java.util.Map;
-
 /**
- * Abstract {@link org.apache.flink.metrics.MetricGroup} for system components (e.g., 
+ * Abstract {@link org.apache.flink.metrics.MetricGroup} for system components (e.g.,
  * TaskManager, Job, Task, Operator).
- * 
+ *
  * <p>Usually, the scope of metrics is simply the hierarchy of the containing groups. For example
  * the Metric {@code "MyMetric"} in group {@code "B"} nested in group {@code "A"} would have a
  * fully scoped name of {@code "A.B.MyMetric"}, with {@code "A.B"} being the Metric's scope.
@@ -36,7 +33,7 @@ import java.util.Map;
  * certain identifiers from the scope. The scope for metrics belonging to the "Task"
  * group could for example include the task attempt number (more fine grained identification), or
  * exclude it (for continuity of the namespace across failure and recovery).
- * 
+ *
  * @param <P> The type of the parent MetricGroup.
  */
 @Internal
@@ -51,29 +48,6 @@ public abstract class ComponentMetricGroup<P extends AbstractMetricGroup<?>> ext
 	public ComponentMetricGroup(MetricRegistry registry, String[] scope, P parent) {
 		super(registry, scope, parent);
 	}
-
-	@Override
-	public Map<String, String> getAllVariables() {
-		if (variables == null) { // avoid synchronization for common case
-			synchronized (this) {
-				if (variables == null) {
-					variables = new HashMap<>();
-					putVariables(variables);
-					if (parent != null) { // not true for Job-/TaskManagerMetricGroup
-						variables.putAll(parent.getAllVariables());
-					}
-				}
-			}
-		}
-		return variables;
-	}
-
-	/**
-	 * Enters all variables specific to this ComponentMetricGroup and their associated values into the map.
-	 *
-	 * @param variables map to enter variables and their values into
-     */
-	protected abstract void putVariables(Map<String, String> variables);
 
 	/**
 	 * Closes the component group by removing and closing all metrics and subgroups
@@ -101,7 +75,7 @@ public abstract class ComponentMetricGroup<P extends AbstractMetricGroup<?>> ext
 
 	/**
 	 * Gets all component metric groups that are contained in this component metric group.
-	 * 
+	 *
 	 * @return All component metric groups that are contained in this component metric group.
 	 */
 	protected abstract Iterable<? extends ComponentMetricGroup> subComponents();

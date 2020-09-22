@@ -17,23 +17,42 @@
 
 package org.apache.flink.streaming.connectors.kinesis.serialization;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.streaming.util.serialization.DeserializationSchema;
+import org.apache.flink.util.Collector;
 
 import java.io.IOException;
 
 /**
- * A simple wrapper for using the {@link DeserializationSchema} with the {@link KinesisDeserializationSchema} interface
+ * A simple wrapper for using the {@link DeserializationSchema} with the {@link KinesisDeserializationSchema} interface.
  *
  * @param <T> The type created by the deserialization schema.
  */
+@Internal
 public class KinesisDeserializationSchemaWrapper<T> implements KinesisDeserializationSchema<T> {
 	private static final long serialVersionUID = 9143148962928375886L;
 
 	private final DeserializationSchema<T> deserializationSchema;
 
 	public KinesisDeserializationSchemaWrapper(DeserializationSchema<T> deserializationSchema) {
+		try {
+			Class<? extends DeserializationSchema> deserilizationClass = deserializationSchema.getClass();
+			if (!deserilizationClass.getMethod("deserialize", byte[].class, Collector.class).isDefault()) {
+				throw new IllegalArgumentException(
+					"Kinesis consumer does not support DeserializationSchema that implements " +
+						"deserialization with a Collector. Unsupported DeserializationSchema: " +
+						deserilizationClass.getName());
+			}
+		} catch (NoSuchMethodException e) {
+			// swallow the exception
+		}
 		this.deserializationSchema = deserializationSchema;
+	}
+
+	@Override
+	public void open(DeserializationSchema.InitializationContext context) throws Exception {
+		this.deserializationSchema.open(context);
 	}
 
 	@Override
