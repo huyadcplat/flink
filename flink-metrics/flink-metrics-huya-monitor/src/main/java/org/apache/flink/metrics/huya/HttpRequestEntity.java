@@ -8,10 +8,12 @@ import java.util.List;
  *
  */
 public class HttpRequestEntity {
+	private String name;
 	private String jobId;
 	private String node;
 
-	public HttpRequestEntity(String jobId, String node) {
+	public HttpRequestEntity(String name, String jobId, String node) {
+		this.name = name;
 		this.jobId = jobId;
 		this.node = node;
 	}
@@ -34,7 +36,7 @@ public class HttpRequestEntity {
 		List<ReportObj> reportObjs = new ArrayList<>();
 		for (DMetric dMetric : metrics) {
 			ReportObj reportObj = new ReportObj();
-			reportObj.setMetricName("bigdata.flink.metrics");
+			reportObj.setMetricName(name);
 			reportObj.setHost(dMetric.getHost());
 			reportObj.setJobId(jobId);
 			reportObj.setNode(node);

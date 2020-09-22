@@ -166,7 +166,7 @@ public class HuyaMonitorReportor extends AbstractReporter implements Scheduled {
 
 	@Override
 	public void report() {
-		HttpRequestEntity entity = new HttpRequestEntity(jobId, node);
+		HttpRequestEntity entity = new HttpRequestEntity(name, jobId, node);
 		for (DMeter dMeter : meters.values()) {
 			entity.addMetric(dMeter);
 		}
