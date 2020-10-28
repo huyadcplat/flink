@@ -22,8 +22,6 @@ import org.apache.flink.api.common.Plan;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.runtime.execution.librarycache.FlinkUserCodeClassLoaders;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
@@ -40,7 +38,6 @@ import java.util.jar.JarFile;
  */
 public class JobWithJars {
 
-	private static Logger log = LoggerFactory.getLogger(JobWithJars.class);
 
 	private Plan plan;
 
