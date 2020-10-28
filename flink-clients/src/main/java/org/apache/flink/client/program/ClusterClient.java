@@ -334,6 +334,7 @@ public abstract class ClusterClient<T> {
 	public JobSubmissionResult run(FlinkPlan compiledPlan,
 			List<URL> libraries, List<URL> classpaths, ClassLoader classLoader, SavepointRestoreSettings savepointSettings)
 			throws ProgramInvocationException {
+		log.info("获取jobGraph, lib={}, classpaths={}", libraries, classpaths);
 		JobGraph job = getJobGraph(flinkConfig, compiledPlan, libraries, classpaths, savepointSettings);
 		return submitJob(job, classLoader);
 	}

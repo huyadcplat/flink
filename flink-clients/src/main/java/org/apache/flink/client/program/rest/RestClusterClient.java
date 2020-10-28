@@ -338,6 +338,7 @@ public class RestClusterClient<T> extends ClusterClient<T> implements NewCluster
 			filesToUpload.add(new FileUpload(jobGraphFile, RestConstants.CONTENT_TYPE_BINARY));
 
 			for (Path jar : jobGraph.getUserJars()) {
+				log.info("upload user jar={}", jobGraph.getUserJars());
 				jarFileNames.add(jar.getName());
 				filesToUpload.add(new FileUpload(Paths.get(jar.toUri()), RestConstants.CONTENT_TYPE_JAR));
 			}

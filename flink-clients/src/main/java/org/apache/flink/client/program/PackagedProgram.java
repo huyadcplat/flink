@@ -28,6 +28,8 @@ import org.apache.flink.optimizer.dag.DataSinkNode;
 import org.apache.flink.optimizer.plandump.PlanJSONDumpGenerator;
 import org.apache.flink.runtime.jobgraph.SavepointRestoreSettings;
 import org.apache.flink.util.InstantiationUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -45,6 +47,7 @@ import java.lang.reflect.Modifier;
 import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.FileSystems;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -67,6 +70,8 @@ import java.util.jar.Manifest;
  * a program plan.
  */
 public class PackagedProgram {
+
+	private static Logger log = LoggerFactory.getLogger(PackagedProgram.class);
 
 	/**
 	 * Property name of the entry in JAR manifest file that describes the Flink specific entry point.
@@ -351,6 +356,7 @@ public class PackagedProgram {
 	 */
 	public JobWithJars getPlanWithJars() throws ProgramInvocationException {
 		if (isUsingProgramEntryPoint()) {
+			log.info("using programEntryPoint,userCodeClassLoader={}", ((URLClassLoader) userCodeClassLoader).getURLs());
 			return new JobWithJars(getPlan(), getAllLibraries(), classpaths, userCodeClassLoader);
 		} else {
 			throw new ProgramInvocationException("Cannot create a " + JobWithJars.class.getSimpleName() +
@@ -535,6 +541,11 @@ public class PackagedProgram {
 			}
 		}
 
+		for (URL classpath : this.classpaths) {
+			libs.add(classpath);
+		}
+
+		log.info("get all library :{}, classpath={}", libs, classpaths);
 		return libs;
 	}
 
