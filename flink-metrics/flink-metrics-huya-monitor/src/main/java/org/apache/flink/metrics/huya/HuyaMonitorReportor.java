@@ -1,29 +1,22 @@
 package org.apache.flink.metrics.huya;
 
-import org.apache.flink.metrics.Counter;
-import org.apache.flink.metrics.Gauge;
-import org.apache.flink.metrics.Histogram;
-import org.apache.flink.metrics.Meter;
-import org.apache.flink.metrics.Metric;
-import org.apache.flink.metrics.MetricConfig;
-import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.metrics.*;
 import org.apache.flink.metrics.reporter.AbstractReporter;
 import org.apache.flink.metrics.reporter.Scheduled;
-
+import org.apache.flink.runtime.metrics.groups.AbstractMetricGroup;
+import org.apache.flink.runtime.metrics.groups.ComponentMetricGroup;
+import org.apache.flink.runtime.metrics.groups.FrontMetricGroup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.SocketTimeoutException;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
-import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.HOST;
-import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.JOBID;
-import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.NAME;
-import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.NODE;
-import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.PORT;
-import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.URI;
+import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.*;
+
 
 /**
  * report flink metric to huya monitor system.
@@ -31,151 +24,131 @@ import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.URI;
 public class HuyaMonitorReportor extends AbstractReporter implements Scheduled {
 
 	private static final Logger LOG = LoggerFactory.getLogger(HuyaMonitorReportor.class);
-	private static final String HOST_VARIABLE = "<host>";
 
-	private String name;
+	private String namespace;
 	private String jobId;
-	private String node;
+	private int step = 60;
 	private HttpClient client;
-	private Map<String, String> configTags = new HashMap<>();
+	private static final Pattern UNALLOWED_CHAR_PATTERN = Pattern.compile("[^a-zA-Z0-9:_]");
+	private static final String DELIMITE = "_";
+	private String metricUrl;
+	private Set<String> metricsSet = new HashSet<>();
+	private AtomicLong time = new AtomicLong(0);
 
 	protected final Map<Gauge<?>, DGauge> gauges = new ConcurrentHashMap<>();
 	protected final Map<Counter, DCounter> counters = new ConcurrentHashMap<>();
 	protected final Map<Histogram, String> histograms = new ConcurrentHashMap<>();
 	protected final Map<Meter, DMeter> meters = new ConcurrentHashMap<>();
 
+
 	@Override
 	public void notifyOfAddedMetric(Metric metric, String metricName, MetricGroup group) {
-		final String name = group.getMetricIdentifier(metricName, this);
-
-		Map<String, String> tags = new HashMap<>(configTags);
-		tags.putAll(getTagsFromMetricGroup(group));
-		String host = getHostFromMetricGroup(group);
-
 		synchronized (this) {
+			final String name = filter(((FrontMetricGroup<AbstractMetricGroup<?>>) group).getLogicalScope(this) + DELIMITE + metricName);
+			Map<String, String> tags = getTags(group);
 			if (metric instanceof Counter) {
 				Counter c = (Counter) metric;
-				counters.put(c, new DCounter(c, name, host, tags));
+				counters.put(c, new DCounter(c, name, tags));
 			} else if (metric instanceof Gauge) {
 				Gauge g = (Gauge) metric;
-
-				gauges.put(g, new DGauge(g, name, host, tags));
+				gauges.put(g, new DGauge(g, name, tags));
 			} else if (metric instanceof Meter) {
 				Meter m = (Meter) metric;
 				// Only consider rate
-				meters.put(m, new DMeter(m, name, host, tags));
+				meters.put(m, new DMeter(m, name, tags));
 			} else {
 				log.warn("Cannot add unknown metric type {}. This indicates that the reporter " +
 					"does not support this metric type.", metric.getClass().getName());
 			}
+
 		}
 	}
 
-	@Override
-	public void notifyOfRemovedMetric(Metric metric, String metricName, MetricGroup group) {
-		synchronized (this) {
-			if (metric instanceof Counter) {
-				counters.remove(metric);
-			} else if (metric instanceof Gauge) {
-				gauges.remove(metric);
-			} else if (metric instanceof Histogram) {
-				histograms.remove(metric);
-			} else if (metric instanceof Meter) {
-				meters.remove(metric);
-			} else {
-				log.warn("Cannot remove unknown metric type {}. This indicates that the reporter " +
-					"does not support this metric type.", metric.getClass().getName());
+	private static Map<String, String> getTags(MetricGroup group) {
+		// Keys are surrounded by brackets: remove them, transforming "<name>" to "name".
+		Map<String, String> tags = new HashMap<>();
+		for (Map.Entry<String, String> variable : group.getAllVariables().entrySet()) {
+			String name = variable.getKey();
+			String value = variable.getValue();
+			if (value.length() > 60) {
+				value = value.substring(0, 50) + "-" + Md5Utils.crypt(value);
 			}
+			tags.put(name.substring(1, name.length() - 1), value);
 		}
+		return tags;
 	}
 
 	@Override
 	public String filterCharacters(String str) {
-		char[] chars = null;
-		final int strLen = str.length();
-		int pos = 0;
-		for (int i = 0; i < strLen; i++) {
-			final char c = str.charAt(i);
-			switch (c) {
-				case '>':
-				case '<':
-				case '"':
-					// remove character by not moving cursor
-					if (chars == null) {
-						chars = str.toCharArray();
-					}
-					break;
-				case ' ':
-					if (chars == null) {
-						chars = str.toCharArray();
-					}
-					chars[pos++] = '_';
-					break;
-				case ',':
-				case '=':
-				case ';':
-				case ':':
-				case '?':
-				case '\'':
-				case '*':
-					if (chars == null) {
-						chars = str.toCharArray();
-					}
-					chars[pos++] = '-';
-					break;
-				default:
-					if (chars != null) {
-						chars[pos] = c;
-					}
-					pos++;
-			}
-		}
-		return chars == null ? str : new String(chars, 0, pos);
+		// Only [a-zA-Z0-9:_.] are valid in metric names, any other characters should be sanitized to an underscore.
+		return filter(str);
+	}
+
+	public static String filter(String str) {
+		return UNALLOWED_CHAR_PATTERN.matcher(str).replaceAll(DELIMITE);
 	}
 
 	@Override
 	public void open(MetricConfig config) {
-		name = config.getString(NAME.key(), NAME.defaultValue());
-		if (name == null) {
-			throw new IllegalArgumentException("Invalid name configuration. name: " + name);
+		namespace = config.getString(NAMESPACE.key(), NAMESPACE.defaultValue());
+		if (NAMESPACE == null) {
+			throw new IllegalArgumentException("Invalid name configuration. NAMESPACE: " + namespace);
 		}
 
-		jobId = config.getString(JOBID.key(), JOBID.defaultValue());
+		jobId = config.getString(JOB_ID.key(), JOB_ID.defaultValue());
 		if (jobId == null) {
 			throw new IllegalArgumentException("Invalid jobId configuration. jobId: " + jobId);
 		}
-		node = config.getString(NODE.key(), NODE.defaultValue());
-		if (node == null) {
-			throw new IllegalArgumentException("Invalid node configuration. node: " + node);
+		step = config.getInteger(STEP.key(), STEP.defaultValue());
+		metricUrl = config.getString(METRIC_URL.key(), METRIC_URL.defaultValue());
+		log.info("Configured HuyaMonitorReportor with metricUrl:{}", metricUrl);
+		String address = config.getString(URL.key(), URL.defaultValue());
+		if (address == null) {
+			throw new IllegalArgumentException("Invalid host configuration. url: " + address);
 		}
-		String host = config.getString(HOST.key(), HOST.defaultValue());
-		if (host == null) {
-			throw new IllegalArgumentException("Invalid host configuration. host: " + host);
-		}
-		int port = config.getInteger(PORT.key(), PORT.defaultValue());
-		String address = String.format("http://%s:%d", host, port);
-		String uri = config.getString(URI.key(), URI.defaultValue());
-		client = new HttpClient(address, uri);
-		log.info("Configured HuyaMonitorReportor with {address:{}, uri path:{}}", address, uri);
+
+		client = new HttpClient(address);
+		log.info("Configured HuyaMonitorReportor with address:{}", address);
+
+		metricsSet = client.getRequiredMetrics(metricUrl);
+		log.info("get metrics size={}, detail={}", metricsSet.size(), metricsSet.toArray());
 	}
+
 
 	@Override
 	public void close() {
 		client.close();
 	}
 
+	private boolean filterMetric(DMetric metric) {
+		return metricsSet.contains(metric.getMetric());
+	}
+
 	@Override
 	public void report() {
-		HttpRequestEntity entity = new HttpRequestEntity(name, jobId, node);
+		HttpRequestEntity entity = new HttpRequestEntity(namespace, jobId, step);
+		List<Gauge> gaugesToRemove = new ArrayList<>();
+		for (Map.Entry<Gauge<?>, DGauge> entry : gauges.entrySet()) {
+			DGauge g = entry.getValue();
+			if (g.getMetricValue() == null) {
+				gaugesToRemove.add(entry.getKey());
+			}
+		}
+		gaugesToRemove.forEach(gauges::remove);
 		for (DMeter dMeter : meters.values()) {
-			entity.addMetric(dMeter);
+			if (filterMetric(dMeter)) {
+				entity.addMetric(dMeter);
+			}
 		}
 		for (DGauge dGauge : gauges.values()) {
-
-			entity.addMetric(dGauge);
+			if (filterMetric(dGauge)) {
+				entity.addMetric(dGauge);
+			}
 		}
 		for (DCounter dCounter : counters.values()) {
-			entity.addMetric(dCounter);
+			if (filterMetric(dCounter)) {
+				entity.addMetric(dCounter);
+			}
 		}
 		try {
 			client.send(entity.getReportList());
@@ -184,32 +157,20 @@ public class HuyaMonitorReportor extends AbstractReporter implements Scheduled {
 		} catch (Exception e) {
 			LOG.warn("Failed reporting metrics.", e);
 		}
-	}
 
-	private String getHostFromMetricGroup(MetricGroup metricGroup) {
-		return metricGroup.getAllVariables().get(HOST_VARIABLE);
-	}
-
-	/**
-	 * Get tags from MetricGroup#getAllVariables(), excluding 'host'.
-	 */
-	private Map<String, String> getTagsFromMetricGroup(MetricGroup metricGroup) {
-		Map<String, String> tags = new HashMap<>();
-
-		for (Map.Entry<String, String> entry : metricGroup.getAllVariables().entrySet()) {
-			if (!entry.getKey().equals(HOST_VARIABLE)) {
-				tags.put(entry.getKey(), entry.getValue());
+		long interval = time.addAndGet(1);
+		if (interval % 5 == 0) {
+			Set<String> set = client.getRequiredMetrics(metricUrl);
+			if (set.size() > 0) {
+				synchronized (metricsSet) {
+					metricsSet = set;
+				}
+			}
+			if (interval % 20 == 0) {
+				log.info("get metrics size={}, detail={}", metricsSet.size(), metricsSet.toArray());
 			}
 		}
-
-		return tags;
 	}
 
-	/**
-	 * Removes leading and trailing angle brackets.
-	 */
-	private String getVariableName(String str) {
-		return str.substring(1, str.length() - 1);
-	}
 
 }

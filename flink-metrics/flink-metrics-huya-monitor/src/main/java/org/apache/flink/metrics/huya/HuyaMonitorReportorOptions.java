@@ -9,34 +9,33 @@ import org.apache.flink.configuration.ConfigOptions;
  */
 public class HuyaMonitorReportorOptions {
 
-	public static final ConfigOption<String> NAME = ConfigOptions
-		.key("name")
-		.noDefaultValue()
-		.withDescription("The HuyaMonitor system metadata name");
+	public static final ConfigOption<String> NAMESPACE = ConfigOptions
+		.key("namespace")
+		.defaultValue("realtime.platform")
+		.withDescription("The HuyaMonitor system metadata namespace");
 
-	public static final ConfigOption<String> HOST = ConfigOptions
-		.key("host")
-		.noDefaultValue()
-		.withDescription("The HuyaMonitoir report server host.");
+	/**
+	 * 上报url: 默认配置为  http://neo-transfer.huya.info/api/v1/push
+	 */
+	public static final ConfigOption<String> URL = ConfigOptions
+		.key("url")
+		.defaultValue("http://neo-transfer.huya.info/api/v1/push")
+		.withDescription("The HuyaMonitoir report server url.");
 
-	public static final ConfigOption<Integer> PORT = ConfigOptions
-		.key("port")
-		.defaultValue(80)
-		.withDescription("The HuyaMonitoir report server port.");
+	public static final ConfigOption<String> METRIC_URL = ConfigOptions
+		.key("metric-url")
+		.defaultValue("https://stream-dc.huya.com/svr/metrics/getAllMetrics.do")
+		.withDescription("The HuyaMonitoir report server url.");
 
-	public static final ConfigOption<String> URI = ConfigOptions
-		.key("uri")
-		.defaultValue("/")
-		.withDescription("The HuyaMonitoir report server uri.");
 
-	public static final ConfigOption<String> JOBID = ConfigOptions
+
+	public static final ConfigOption<String> JOB_ID = ConfigOptions
 		.key("job-id")
 		.noDefaultValue()
 		.withDescription("The HuyaMonitoir report job-id.");
 
-	public static final ConfigOption<String> NODE = ConfigOptions
-		.key("node")
-		.noDefaultValue()
-		.withDescription("The HuyaMonitoir report node type: (taskExecutor/jobMaster)");
-
+	public static final ConfigOption<Integer> STEP = ConfigOptions
+		.key("step")
+		.defaultValue(60)
+		.withDescription("The HuyaMonitoir report step.");
 }

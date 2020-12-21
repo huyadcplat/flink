@@ -30,13 +30,13 @@ import java.util.Map;
 public class DMeter extends DMetric {
 	private final Meter meter;
 
-	public DMeter(Meter m, String metricName, String host, Map<String, String> tags) {
-		super(MetricType.gauge, metricName, host, tags);
+	public DMeter(Meter m, String metricName, Map<String, String> tags) {
+		super(MetricType.gauge, metricName, tags);
 		meter = m;
 	}
 
 	@Override
-	public Number getMetricValue() {
+	public Double getMetricValue() {
 		return meter.getRate();
 	}
 }

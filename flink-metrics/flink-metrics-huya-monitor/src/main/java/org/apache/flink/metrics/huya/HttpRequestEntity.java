@@ -8,14 +8,14 @@ import java.util.List;
  *
  */
 public class HttpRequestEntity {
-	private String name;
+	private String namespace;
 	private String jobId;
-	private String node;
+	private int step;
 
-	public HttpRequestEntity(String name, String jobId, String node) {
-		this.name = name;
+	public HttpRequestEntity(String namespace, String jobId, int step) {
+		this.namespace = namespace;
 		this.jobId = jobId;
-		this.node = node;
+		this.step = step;
 	}
 
 	private List<DMetric> metrics = new ArrayList<>();
@@ -32,17 +32,17 @@ public class HttpRequestEntity {
 		metrics.add(metric);
 	}
 
-	public List<ReportObj> getReportList() {
-		List<ReportObj> reportObjs = new ArrayList<>();
+	public List<ReportRequest> getReportList() {
+		List<ReportRequest> reportObjs = new ArrayList<>();
 		for (DMetric dMetric : metrics) {
-			ReportObj reportObj = new ReportObj();
-			reportObj.setMetricName(name);
-			reportObj.setHost(dMetric.getHost());
-			reportObj.setJobId(jobId);
-			reportObj.setNode(node);
-			reportObj.setName(dMetric.getMetric());
-			reportObj.setValue(dMetric.getMetricValue());
-			reportObj.setIts(dMetric.getUnixEpochTimestamp());
+			ReportRequest reportObj = new ReportRequest()
+				.setNamespace(namespace)
+				.setMetric(jobId)
+				.setEndpoint(dMetric.getMetric())
+				.setStep(step)
+				.setTimestamp(DMetric.getUnixEpochTimestamp())
+				.setTags(dMetric.getStringTags())
+				.setValue(dMetric.getMetricValue());
 			reportObjs.add(reportObj);
 		}
 		return reportObjs;

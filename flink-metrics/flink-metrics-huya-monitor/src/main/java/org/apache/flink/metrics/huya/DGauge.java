@@ -26,7 +26,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 
 /**
- * Mapping of gauge between Flink and Datadog.
+ * Mapping of gauge between Flink and neo.
  */
 public class DGauge extends DMetric {
 
@@ -34,8 +34,8 @@ public class DGauge extends DMetric {
 
 	private final Gauge<?> gauge;
 
-	public DGauge(Gauge g, String metricName, String host, Map<String, String> tags) {
-		super(MetricType.gauge, metricName, host, tags);
+	public DGauge(Gauge g, String metricName, Map<String, String> tags) {
+		super(MetricType.gauge, metricName, tags);
 		gauge = g;
 	}
 
@@ -44,20 +44,20 @@ public class DGauge extends DMetric {
 	 * since we deliberately not map it to json object in a Datadog-defined format.
 	 */
 	@Override
-	public Number getMetricValue() {
+	public Double getMetricValue() {
 		final Object value = gauge.getValue();
 		if (value == null) {
 			LOG.warn("Gauge {} is null-valued, defaulting to 0.", gauge);
-			return 0;
+			return null;
 		}
 		if (value instanceof Number) {
-			return (Number) value;
+			return ((Number) value).doubleValue();
 		}
 		if (value instanceof Boolean) {
-			return ((Boolean) value) ? 1 : 0;
+			return ((Boolean) value) ? 1.0 : 0;
 		}
 		LOG.warn("Invalid type for Gauge {}: {}, only number types and booleans are supported by this reporter.",
 			gauge, value.getClass().getName());
-		return 0;
+		return null;
 	}
 }
