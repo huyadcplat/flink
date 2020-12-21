@@ -87,7 +87,6 @@ public class PipelinedRegionSchedulingITCase extends TestLogger {
 		final Configuration configuration = new Configuration();
 		configuration.setString(RestOptions.BIND_PORT, "0");
 		configuration.setLong(JobManagerOptions.SLOT_REQUEST_TIMEOUT, 5000L);
-		configuration.setString(JobManagerOptions.SCHEDULING_STRATEGY, "region");
 
 		final MiniClusterConfiguration miniClusterConfiguration = new MiniClusterConfiguration.Builder()
 			.setConfiguration(configuration)
@@ -163,7 +162,7 @@ public class PipelinedRegionSchedulingITCase extends TestLogger {
 				writer.emit(new IntValue(42));
 				writer.flushAll();
 			} finally {
-				writer.clearBuffers();
+				writer.close();
 			}
 
 			if (getIndexInSubtaskGroup() == 0) {

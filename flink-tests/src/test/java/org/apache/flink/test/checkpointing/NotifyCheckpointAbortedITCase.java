@@ -36,10 +36,11 @@ import org.apache.flink.core.fs.Path;
 import org.apache.flink.core.testutils.OneShotLatch;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.checkpoint.CheckpointRecoveryFactory;
+import org.apache.flink.runtime.checkpoint.CheckpointsCleaner;
 import org.apache.flink.runtime.checkpoint.CompletedCheckpoint;
+import org.apache.flink.runtime.checkpoint.PerJobCheckpointRecoveryFactory;
 import org.apache.flink.runtime.checkpoint.StandaloneCheckpointIDCounter;
 import org.apache.flink.runtime.checkpoint.StandaloneCompletedCheckpointStore;
-import org.apache.flink.runtime.checkpoint.TestingCheckpointRecoveryFactory;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
 import org.apache.flink.runtime.highavailability.HighAvailabilityServicesFactory;
@@ -421,9 +422,9 @@ public class NotifyCheckpointAbortedITCase extends TestLogger {
 		}
 
 		@Override
-		public void addCheckpoint(CompletedCheckpoint checkpoint) throws Exception {
+		public void addCheckpoint(CompletedCheckpoint checkpoint, CheckpointsCleaner checkpointsCleaner, Runnable postCleanup) throws Exception {
 			if (abortCheckpointLatch.isTriggered()) {
-				super.addCheckpoint(checkpoint);
+				super.addCheckpoint(checkpoint, checkpointsCleaner, postCleanup);
 			} else {
 				// tell main thread that all checkpoints on task side have been finished.
 				addCheckpointLatch.trigger();
@@ -447,7 +448,7 @@ public class NotifyCheckpointAbortedITCase extends TestLogger {
 		@Override
 		public HighAvailabilityServices createHAServices(Configuration configuration, Executor executor) {
 			return new TestingHaServices(
-				new TestingCheckpointRecoveryFactory(new TestingCompletedCheckpointStore(), new StandaloneCheckpointIDCounter()),
+				PerJobCheckpointRecoveryFactory.useSameServicesForAllJobs(new TestingCompletedCheckpointStore(), new StandaloneCheckpointIDCounter()),
 				executor);
 		}
 	}

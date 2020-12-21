@@ -113,12 +113,6 @@ public class MiniClusterITCase extends TestLogger {
 		} catch (JobExecutionException e) {
 			assertTrue(findThrowableWithMessage(e, "Job execution failed.").isPresent());
 			assertTrue(findThrowable(e, NoResourceAvailableException.class).isPresent());
-
-			//TODO: remove the legacy scheduler message check once legacy scheduler is removed
-			final String legacySchedulerErrorMessage = "Slots required: 2, slots allocated: 1";
-			final String ngSchedulerErrorMessage = "Could not allocate the required slot within slot request timeout";
-			assertTrue(findThrowableWithMessage(e, legacySchedulerErrorMessage).isPresent() ||
-				findThrowableWithMessage(e, ngSchedulerErrorMessage).isPresent());
 		}
 	}
 
@@ -130,12 +124,6 @@ public class MiniClusterITCase extends TestLogger {
 		} catch (JobExecutionException e) {
 			assertTrue(findThrowableWithMessage(e, "Job execution failed.").isPresent());
 			assertTrue(findThrowable(e, NoResourceAvailableException.class).isPresent());
-
-			//TODO: remove the legacy scheduler message check once legacy scheduler is removed
-			final String legacySchedulerErrorMessage = "Could not allocate enough slots";
-			final String ngSchedulerErrorMessage = "Could not allocate the required slot within slot request timeout";
-			assertTrue(findThrowableWithMessage(e, legacySchedulerErrorMessage).isPresent() ||
-				findThrowableWithMessage(e, ngSchedulerErrorMessage).isPresent());
 		}
 	}
 
@@ -400,9 +388,15 @@ public class MiniClusterITCase extends TestLogger {
 		try (final MiniCluster miniCluster = new MiniCluster(cfg)) {
 			miniCluster.start();
 
+			// putting sender and receiver vertex in the same slot sharing group is required
+			// to ensure all senders can be deployed. Otherwise this case can fail if the
+			// expected failing sender is not deployed.
+			final SlotSharingGroup group = new SlotSharingGroup();
+
 			final JobVertex sender = new JobVertex("Sender");
 			sender.setInvokableClass(SometimesExceptionSender.class);
 			sender.setParallelism(parallelism);
+			sender.setSlotSharingGroup(group);
 
 			// set failing senders
 			SometimesExceptionSender.configFailingSenders(parallelism);
@@ -410,6 +404,7 @@ public class MiniClusterITCase extends TestLogger {
 			final JobVertex receiver = new JobVertex("Receiver");
 			receiver.setInvokableClass(Receiver.class);
 			receiver.setParallelism(parallelism);
+			receiver.setSlotSharingGroup(group);
 
 			receiver.connectNewDataSetAsInput(sender, DistributionPattern.POINTWISE,
 				ResultPartitionType.PIPELINED);
@@ -514,9 +509,15 @@ public class MiniClusterITCase extends TestLogger {
 		try (final MiniCluster miniCluster = new MiniCluster(cfg)) {
 			miniCluster.start();
 
+			// putting sender and receiver vertex in the same slot sharing group is required
+			// to ensure all senders can be deployed. Otherwise this case can fail if the
+			// expected failing sender is not deployed.
+			final SlotSharingGroup group = new SlotSharingGroup();
+
 			final JobVertex sender = new JobVertex("Sender");
 			sender.setInvokableClass(SometimesInstantiationErrorSender.class);
 			sender.setParallelism(parallelism);
+			sender.setSlotSharingGroup(group);
 
 			// set failing senders
 			SometimesInstantiationErrorSender.configFailingSenders(parallelism);
@@ -524,6 +525,7 @@ public class MiniClusterITCase extends TestLogger {
 			final JobVertex receiver = new JobVertex("Receiver");
 			receiver.setInvokableClass(Receiver.class);
 			receiver.setParallelism(parallelism);
+			receiver.setSlotSharingGroup(group);
 
 			receiver.connectNewDataSetAsInput(sender, DistributionPattern.POINTWISE,
 				ResultPartitionType.PIPELINED);

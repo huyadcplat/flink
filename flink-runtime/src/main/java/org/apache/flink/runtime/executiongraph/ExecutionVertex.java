@@ -23,7 +23,6 @@ import org.apache.flink.api.common.Archiveable;
 import org.apache.flink.api.common.InputDependencyConstraint;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.time.Time;
-import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.core.io.InputSplit;
 import org.apache.flink.core.io.InputSplitAssigner;
 import org.apache.flink.runtime.JobException;
@@ -37,7 +36,6 @@ import org.apache.flink.runtime.jobgraph.JobEdge;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobmanager.scheduler.CoLocationConstraint;
 import org.apache.flink.runtime.jobmanager.scheduler.CoLocationGroup;
-import org.apache.flink.runtime.jobmanager.scheduler.LocationPreferenceConstraint;
 import org.apache.flink.runtime.jobmaster.LogicalSlot;
 import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
 import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
@@ -46,7 +44,6 @@ import org.apache.flink.util.ExceptionUtils;
 
 import org.slf4j.Logger;
 
-import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
@@ -102,26 +99,6 @@ public class ExecutionVertex implements AccessExecutionVertex, Archiveable<Archi
 	// --------------------------------------------------------------------------------------------
 
 	/**
-	 * Convenience constructor for tests. Sets various fields to default values.
-	 */
-	@VisibleForTesting
-	ExecutionVertex(
-			ExecutionJobVertex jobVertex,
-			int subTaskIndex,
-			IntermediateResult[] producedDataSets,
-			Time timeout) {
-
-		this(
-			jobVertex,
-			subTaskIndex,
-			producedDataSets,
-			timeout,
-			1L,
-			System.currentTimeMillis(),
-			JobManagerOptions.MAX_ATTEMPTS_HISTORY_SIZE.defaultValue());
-	}
-
-	/**
 	 * Creates an ExecutionVertex.
 	 *
 	 * @param timeout
@@ -133,7 +110,7 @@ public class ExecutionVertex implements AccessExecutionVertex, Archiveable<Archi
 	 * @param maxPriorExecutionHistoryLength
 	 *            The number of prior Executions (= execution attempts) to keep.
 	 */
-	public ExecutionVertex(
+	ExecutionVertex(
 			ExecutionJobVertex jobVertex,
 			int subTaskIndex,
 			IntermediateResult[] producedDataSets,
@@ -676,26 +653,6 @@ public class ExecutionVertex implements AccessExecutionVertex, Archiveable<Archi
 		}
 	}
 
-	/**
-	 * Schedules the current execution of this ExecutionVertex.
-	 *
-	 * @param slotProviderStrategy to allocate the slots from
-	 * @param locationPreferenceConstraint constraint for the location preferences
-	 * @param allPreviousExecutionGraphAllocationIds set with all previous allocation ids in the job graph.
-	 *                                                 Can be empty if the allocation ids are not required for scheduling.
-	 * @return Future which is completed once the execution is deployed. The future
-	 * can also completed exceptionally.
-	 */
-	public CompletableFuture<Void> scheduleForExecution(
-			SlotProviderStrategy slotProviderStrategy,
-			LocationPreferenceConstraint locationPreferenceConstraint,
-			@Nonnull Set<AllocationID> allPreviousExecutionGraphAllocationIds) {
-		return this.currentExecution.scheduleForExecution(
-			slotProviderStrategy,
-			locationPreferenceConstraint,
-			allPreviousExecutionGraphAllocationIds);
-	}
-
 	public void tryAssignResource(LogicalSlot slot) {
 		if (!currentExecution.tryAssignResource(slot)) {
 			throw new IllegalStateException("Could not assign resource " + slot + " to current execution " +
@@ -897,11 +854,11 @@ public class ExecutionVertex implements AccessExecutionVertex, Archiveable<Archi
 	/**
 	 * Simply forward this notification.
 	 */
-	void notifyStateTransition(Execution execution, ExecutionState newState, Throwable error) {
+	void notifyStateTransition(Execution execution, ExecutionState newState) {
 		// only forward this notification if the execution is still the current execution
 		// otherwise we have an outdated execution
 		if (isCurrentExecution(execution)) {
-			getExecutionGraph().notifyExecutionChange(execution, newState, error);
+			getExecutionGraph().notifyExecutionChange(execution, newState);
 		}
 	}
 
@@ -921,9 +878,5 @@ public class ExecutionVertex implements AccessExecutionVertex, Archiveable<Archi
 	@Override
 	public ArchivedExecutionVertex archive() {
 		return new ArchivedExecutionVertex(this);
-	}
-
-	public boolean isLegacyScheduling() {
-		return getExecutionGraph().isLegacyScheduling();
 	}
 }

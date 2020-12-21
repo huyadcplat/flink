@@ -20,7 +20,7 @@ package org.apache.flink.table.planner.plan.nodes.physical.batch
 
 import org.apache.flink.api.dag.Transformation
 import org.apache.flink.configuration.Configuration
-import org.apache.flink.runtime.operators.DamBehavior
+import org.apache.flink.core.memory.ManagedMemoryUseCase
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator
 import org.apache.flink.streaming.api.transformations.OneInputTransformation
 import org.apache.flink.table.data.RowData
@@ -30,7 +30,7 @@ import org.apache.flink.table.planner.calcite.FlinkTypeFactory
 import org.apache.flink.table.planner.delegation.BatchPlanner
 import org.apache.flink.table.planner.plan.`trait`.{FlinkRelDistribution, FlinkRelDistributionTraitDef}
 import org.apache.flink.table.planner.plan.nodes.common.CommonPythonAggregate
-import org.apache.flink.table.planner.plan.nodes.exec.{BatchExecNode, ExecNode}
+import org.apache.flink.table.planner.plan.nodes.exec.{LegacyBatchExecNode, ExecEdge}
 import org.apache.flink.table.planner.plan.nodes.physical.batch.BatchExecPythonGroupAggregate.ARROW_PYTHON_AGGREGATE_FUNCTION_OPERATOR_NAME
 import org.apache.flink.table.planner.plan.rules.physical.batch.BatchExecJoinRuleBase
 import org.apache.flink.table.planner.plan.utils.{FlinkRelOptUtil, RelExplainUtil}
@@ -74,19 +74,8 @@ class BatchExecPythonGroupAggregate(
     aggCalls.zip(aggFunctions),
     isMerge = false,
     isFinal = true)
-  with BatchExecNode[RowData]
+  with LegacyBatchExecNode[RowData]
   with CommonPythonAggregate {
-
-  override def getDamBehavior: DamBehavior = DamBehavior.FULL_DAM
-
-  override def getInputNodes: util.List[ExecNode[BatchPlanner, _]] =
-    List(getInput.asInstanceOf[ExecNode[BatchPlanner, _]])
-
-  override def replaceInputNode(
-      ordinalInParent: Int,
-      newInputNode: ExecNode[BatchPlanner, _]): Unit = {
-    replaceInput(ordinalInParent, newInputNode.asInstanceOf[RelNode])
-  }
 
   override def explainTerms(pw: RelWriter): RelWriter =
     super.explainTerms(pw)
@@ -175,6 +164,13 @@ class BatchExecPythonGroupAggregate(
       aggFunctions)
   }
 
+  //~ ExecNode methods -----------------------------------------------------------
+
+  override def getInputEdges: util.List[ExecEdge] = List(
+    ExecEdge.builder()
+      .damBehavior(ExecEdge.DamBehavior.END_INPUT)
+      .build())
+
   override protected def translateToPlanInternal(
       planner: BatchPlanner): Transformation[RowData] = {
     val input = getInputNodes.get(0).translateToPlan(planner)
@@ -188,8 +184,7 @@ class BatchExecPythonGroupAggregate(
       outputType,
       getConfig(planner.getExecEnv, planner.getTableConfig))
     if (isPythonWorkerUsingManagedMemory(planner.getTableConfig.getConfiguration)) {
-      ExecNode.setManagedMemoryWeight(
-        ret, getPythonWorkerMemory(planner.getTableConfig.getConfiguration).getBytes)
+      ret.declareManagedMemoryUseCaseAtSlotScope(ManagedMemoryUseCase.PYTHON)
     }
     ret
   }
@@ -201,7 +196,7 @@ class BatchExecPythonGroupAggregate(
       config: Configuration): OneInputTransformation[RowData, RowData] = {
 
     val (pythonUdafInputOffsets, pythonFunctionInfos) =
-      extractPythonAggregateFunctionInfos(aggCalls)
+      extractPythonAggregateFunctionInfosFromAggregateCall(aggCalls)
 
     val pythonOperator = getPythonAggregateFunctionOperator(
       config,

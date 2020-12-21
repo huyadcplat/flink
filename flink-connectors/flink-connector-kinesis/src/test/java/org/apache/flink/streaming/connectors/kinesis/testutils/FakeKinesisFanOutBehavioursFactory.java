@@ -28,13 +28,13 @@ import software.amazon.awssdk.services.kinesis.model.ConsumerDescription;
 import software.amazon.awssdk.services.kinesis.model.ConsumerStatus;
 import software.amazon.awssdk.services.kinesis.model.DeregisterStreamConsumerResponse;
 import software.amazon.awssdk.services.kinesis.model.DescribeStreamConsumerResponse;
-import software.amazon.awssdk.services.kinesis.model.DescribeStreamResponse;
+import software.amazon.awssdk.services.kinesis.model.DescribeStreamSummaryResponse;
 import software.amazon.awssdk.services.kinesis.model.LimitExceededException;
 import software.amazon.awssdk.services.kinesis.model.Record;
 import software.amazon.awssdk.services.kinesis.model.RegisterStreamConsumerResponse;
 import software.amazon.awssdk.services.kinesis.model.ResourceNotFoundException;
 import software.amazon.awssdk.services.kinesis.model.StartingPosition;
-import software.amazon.awssdk.services.kinesis.model.StreamDescription;
+import software.amazon.awssdk.services.kinesis.model.StreamDescriptionSummary;
 import software.amazon.awssdk.services.kinesis.model.SubscribeToShardEvent;
 import software.amazon.awssdk.services.kinesis.model.SubscribeToShardEventStream;
 import software.amazon.awssdk.services.kinesis.model.SubscribeToShardRequest;
@@ -86,8 +86,8 @@ public class FakeKinesisFanOutBehavioursFactory {
 		return new ExceptionalKinesisV2(ResourceNotFoundException.builder().build());
 	}
 
-	public static SubscriptionErrorKinesisV2 errorDuringSubscription(final Throwable throwable) {
-		return new SubscriptionErrorKinesisV2(throwable);
+	public static SubscriptionErrorKinesisV2 errorDuringSubscription(final Throwable...throwables) {
+		return new SubscriptionErrorKinesisV2(throwables);
 	}
 
 	public static SubscriptionErrorKinesisV2 alternatingSuccessErrorDuringSubscription() {
@@ -179,19 +179,21 @@ public class FakeKinesisFanOutBehavioursFactory {
 
 		public static final int NUMBER_OF_EVENTS_PER_SUBSCRIPTION = 5;
 
-		private final Throwable throwable;
+		private final Throwable[] throwables;
 
 		AtomicInteger sequenceNumber = new AtomicInteger();
 
-		private SubscriptionErrorKinesisV2(final Throwable throwable) {
+		private SubscriptionErrorKinesisV2(final Throwable...throwables) {
 			super(NUMBER_OF_SUBSCRIPTIONS);
-			this.throwable = throwable;
+			this.throwables = throwables;
 		}
 
 		@Override
 		void sendEvents(Subscriber<? super SubscribeToShardEventStream> subscriber) {
 			sendEventBatch(subscriber);
-			subscriber.onError(throwable);
+			for (Throwable throwable : throwables) {
+				subscriber.onError(throwable);
+			}
 		}
 
 		void sendEventBatch(Subscriber<? super SubscribeToShardEventStream> subscriber) {
@@ -426,14 +428,14 @@ public class FakeKinesisFanOutBehavioursFactory {
 		}
 
 		@Override
-		public DescribeStreamResponse describeStream(String stream) throws InterruptedException, ExecutionException {
+		public DescribeStreamSummaryResponse describeStreamSummary(String stream) throws InterruptedException, ExecutionException {
 			if (throwsWhileDescribingStream != null) {
 				throw throwsWhileDescribingStream;
 			}
 
-			return DescribeStreamResponse
+			return DescribeStreamSummaryResponse
 				.builder()
-				.streamDescription(StreamDescription
+				.streamDescriptionSummary(StreamDescriptionSummary
 					.builder()
 					.streamARN(STREAM_ARN)
 					.build())
@@ -530,7 +532,7 @@ public class FakeKinesisFanOutBehavioursFactory {
 	private static class KinesisProxyV2InterfaceAdapter implements KinesisProxyV2Interface {
 
 		@Override
-		public DescribeStreamResponse describeStream(String stream) throws InterruptedException, ExecutionException {
+		public DescribeStreamSummaryResponse describeStreamSummary(String stream) throws InterruptedException, ExecutionException {
 			throw new UnsupportedOperationException("This method is not implemented.");
 		}
 

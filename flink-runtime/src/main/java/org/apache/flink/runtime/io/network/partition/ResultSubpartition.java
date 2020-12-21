@@ -45,14 +45,6 @@ public abstract class ResultSubpartition {
 		this.subpartitionInfo = new ResultSubpartitionInfo(parent.getPartitionIndex(), index);
 	}
 
-	/**
-	 * Whether the buffer can be compressed or not. Note that event is not compressed because it
-	 * is usually small and the size can become even larger after compression.
-	 */
-	protected boolean canBeCompressed(Buffer buffer) {
-		return parent.bufferCompressor != null && buffer.isBuffer() && buffer.readableBytes() > 0;
-	}
-
 	public ResultSubpartitionInfo getSubpartitionInfo() {
 		return subpartitionInfo;
 	}
@@ -75,23 +67,10 @@ public abstract class ResultSubpartition {
 		parent.onConsumedSubpartition(getSubPartitionIndex());
 	}
 
-	/**
-	 * Adds the given buffer.
-	 *
-	 * <p>The request may be executed synchronously, or asynchronously, depending on the
-	 * implementation.
-	 *
-	 * <p><strong>IMPORTANT:</strong> Before adding new {@link BufferConsumer} previously added must be in finished
-	 * state. Because of the performance reasons, this is only enforced during the data reading.
-	 *
-	 * @param bufferConsumer
-	 * 		the buffer to add (transferring ownership to this writer)
-	 * @param isPriorityEvent
-	 * @return true if operation succeeded and bufferConsumer was enqueued for consumption.
-	 * @throws IOException
-	 * 		thrown in case of errors while adding the buffer
-	 */
-	public abstract boolean add(BufferConsumer bufferConsumer, boolean isPriorityEvent) throws IOException;
+	@VisibleForTesting
+	public final boolean add(BufferConsumer bufferConsumer) throws IOException {
+		return add(bufferConsumer, 0);
+	}
 
 	/**
 	 * Adds the given buffer.
@@ -100,17 +79,19 @@ public abstract class ResultSubpartition {
 	 * implementation.
 	 *
 	 * <p><strong>IMPORTANT:</strong> Before adding new {@link BufferConsumer} previously added must be in finished
-	 * state. Because of the performance reasons, this is only enforced during the data reading.
+	 * state. Because of the performance reasons, this is only enforced during the data reading. Priority events can be
+	 * added while the previous buffer consumer is still open, in which case the open buffer consumer is overtaken.
 	 *
 	 * @param bufferConsumer
 	 * 		the buffer to add (transferring ownership to this writer)
+	 * @param partialRecordLength
+	 * 		the length of bytes to skip in order to start with a complete record, from position index 0
+	 *		of the underlying {@cite MemorySegment}.
 	 * @return true if operation succeeded and bufferConsumer was enqueued for consumption.
 	 * @throws IOException
 	 * 		thrown in case of errors while adding the buffer
 	 */
-	public boolean add(BufferConsumer bufferConsumer) throws IOException {
-		return add(bufferConsumer, false);
-	}
+	public abstract boolean add(BufferConsumer bufferConsumer, int partialRecordLength) throws IOException;
 
 	public abstract void flush();
 
@@ -145,17 +126,16 @@ public abstract class ResultSubpartition {
 	 * how many non-event buffers are available in the subpartition.
 	 */
 	public static final class BufferAndBacklog {
-
 		private final Buffer buffer;
-		private final boolean isDataAvailable;
 		private final int buffersInBacklog;
-		private final boolean isEventAvailable;
+		private final Buffer.DataType nextDataType;
+		private final int sequenceNumber;
 
-		public BufferAndBacklog(Buffer buffer, boolean isDataAvailable, int buffersInBacklog, boolean isEventAvailable) {
+		public BufferAndBacklog(Buffer buffer, int buffersInBacklog, Buffer.DataType nextDataType, int sequenceNumber) {
 			this.buffer = checkNotNull(buffer);
 			this.buffersInBacklog = buffersInBacklog;
-			this.isDataAvailable = isDataAvailable;
-			this.isEventAvailable = isEventAvailable;
+			this.nextDataType = checkNotNull(nextDataType);
+			this.sequenceNumber = sequenceNumber;
 		}
 
 		public Buffer buffer() {
@@ -163,7 +143,7 @@ public abstract class ResultSubpartition {
 		}
 
 		public boolean isDataAvailable() {
-			return isDataAvailable;
+			return nextDataType != Buffer.DataType.NONE;
 		}
 
 		public int buffersInBacklog() {
@@ -171,15 +151,27 @@ public abstract class ResultSubpartition {
 		}
 
 		public boolean isEventAvailable() {
-			return isEventAvailable;
+			return nextDataType.isEvent();
 		}
 
-		public static BufferAndBacklog fromBufferAndLookahead(Buffer current, Buffer lookahead, int backlog) {
+		public Buffer.DataType getNextDataType() {
+			return nextDataType;
+		}
+
+		public int getSequenceNumber() {
+			return sequenceNumber;
+		}
+
+		public static BufferAndBacklog fromBufferAndLookahead(
+				Buffer current,
+				Buffer.DataType nextDataType,
+				int backlog,
+				int sequenceNumber) {
 			return new BufferAndBacklog(
-					current,
-					lookahead != null,
-					backlog,
-					lookahead != null && !lookahead.isBuffer());
+				current,
+				backlog,
+				nextDataType,
+				sequenceNumber);
 		}
 	}
 

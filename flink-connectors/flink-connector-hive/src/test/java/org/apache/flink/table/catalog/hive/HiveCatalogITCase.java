@@ -20,7 +20,6 @@ package org.apache.flink.table.catalog.hive;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.CoreOptions;
-import org.apache.flink.connectors.hive.FlinkStandaloneHiveRunner;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Table;
@@ -35,20 +34,17 @@ import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.descriptors.FileSystem;
 import org.apache.flink.table.descriptors.FormatDescriptor;
 import org.apache.flink.table.descriptors.OldCsv;
+import org.apache.flink.table.planner.factories.utils.TestCollectionTableFactory;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CollectionUtil;
 import org.apache.flink.util.FileUtils;
 
-import com.klarna.hiverunner.HiveShell;
-import com.klarna.hiverunner.annotations.HiveSQL;
-import org.apache.hadoop.hive.conf.HiveConf;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
-import org.junit.runner.RunWith;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -56,14 +52,21 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.PrintStream;
 import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.flink.table.api.Expressions.$;
 import static org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM;
@@ -75,25 +78,19 @@ import static org.junit.Assert.assertNull;
  * IT case for HiveCatalog.
  * TODO: move to flink-connector-hive-test end-to-end test module once it's setup
  */
-@RunWith(FlinkStandaloneHiveRunner.class)
 public class HiveCatalogITCase {
-
-	@HiveSQL(files = {})
-	private static HiveShell hiveShell;
 
 	@Rule
 	public TemporaryFolder tempFolder = new TemporaryFolder();
 
 	private static HiveCatalog hiveCatalog;
-	private static HiveConf hiveConf;
 
 	private String sourceTableName = "csv_source";
 	private String sinkTableName = "csv_sink";
 
 	@BeforeClass
 	public static void createCatalog() {
-		hiveConf = hiveShell.getHiveConf();
-		hiveCatalog = HiveTestUtils.createHiveCatalog(hiveConf);
+		hiveCatalog = HiveTestUtils.createHiveCatalog();
 		hiveCatalog.open();
 	}
 
@@ -411,5 +408,48 @@ public class HiveCatalogITCase {
 			tEnv.executeSql("DROP TABLE csv_table");
 			tEnv.executeSql("DROP TABLE print_table");
 		}
+	}
+
+	@Test
+	public void testConcurrentAccessHiveCatalog() throws Exception {
+		int numThreads = 5;
+		ExecutorService executorService = Executors.newFixedThreadPool(numThreads);
+		Callable<List<String>> listDBCallable = () -> hiveCatalog.listDatabases();
+		List<Future<List<String>>> listDBFutures = new ArrayList<>();
+		for (int i = 0; i < numThreads; i++) {
+			listDBFutures.add(executorService.submit(listDBCallable));
+		}
+		executorService.shutdown();
+		for (Future<List<String>> future : listDBFutures) {
+			future.get(5, TimeUnit.SECONDS);
+		}
+	}
+
+	@Test
+	public void testTemporaryGenericTable() throws Exception {
+		EnvironmentSettings settings = EnvironmentSettings.newInstance().useBlinkPlanner().inStreamingMode().build();
+		TableEnvironment tableEnv = TableEnvironment.create(settings);
+		tableEnv.registerCatalog(hiveCatalog.getName(), hiveCatalog);
+		tableEnv.useCatalog(hiveCatalog.getName());
+
+		TestCollectionTableFactory.reset();
+		TestCollectionTableFactory.initData(Arrays.asList(Row.of(1), Row.of(2)));
+		tableEnv.executeSql("create temporary table src(x int) with ('connector'='COLLECTION','is-bounded' = 'false')");
+		File tempDir = Files.createTempDirectory("dest-").toFile();
+		Runtime.getRuntime().addShutdownHook(new Thread(() -> org.apache.commons.io.FileUtils.deleteQuietly(tempDir)));
+		tableEnv.executeSql("create temporary table dest(x int) with (" +
+				"'connector' = 'filesystem'," +
+				String.format("'path' = 'file://%s/1.csv',", tempDir.getAbsolutePath()) +
+				"'format' = 'csv')");
+		tableEnv.executeSql("insert into dest select * from src").await();
+
+		tableEnv.executeSql("create temporary table datagen(i int) with (" +
+				"'connector'='datagen'," +
+				"'rows-per-second'='5'," +
+				"'fields.i.kind'='sequence'," +
+				"'fields.i.start'='1'," +
+				"'fields.i.end'='10')");
+		tableEnv.executeSql("create temporary table blackhole(i int) with ('connector'='blackhole')");
+		tableEnv.executeSql("insert into blackhole select * from datagen").await();
 	}
 }

@@ -648,8 +648,8 @@ public final class ArrowUtils {
 				public RowData next() {
 					// The SelectTableSink of blink planner will convert the table schema and we
 					// need to keep the table schema used here be consistent with the converted table schema
-					TableSchema convertedTableSchema =
-						SelectTableSinkSchemaConverter.changeDefaultConversionClass(table.getSchema());
+					TableSchema convertedTableSchema = SelectTableSinkSchemaConverter.convertTimeAttributeToRegularTimestamp(
+						SelectTableSinkSchemaConverter.changeDefaultConversionClass(table.getSchema()));
 					DataFormatConverters.DataFormatConverter converter =
 						DataFormatConverters.getConverterForDataType(convertedTableSchema.toRowDataType());
 					return (RowData) converter.toInternal(appendOnlyResults.next());
@@ -749,7 +749,7 @@ public final class ArrowUtils {
 					OutputConversionModifyOperation.UpdateMode.APPEND);
 				tableEnv.getPlanner().translate(Collections.singletonList(modifyOperation));
 			} catch (Throwable t) {
-				if (t.getMessage().contains("doesn't support consuming update changes") ||
+				if (t.getMessage().contains("doesn't support consuming update") ||
 						t.getMessage().contains("Table is not an append-only table")) {
 					return false;
 				} else {

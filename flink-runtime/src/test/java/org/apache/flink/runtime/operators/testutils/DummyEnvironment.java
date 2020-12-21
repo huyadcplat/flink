@@ -225,17 +225,17 @@ public class DummyEnvironment implements Environment {
 
 	@Override
 	public ResultPartitionWriter[] getAllWriters() {
-		return null;
+		return new ResultPartitionWriter[0];
 	}
 
 	@Override
 	public IndexedInputGate getInputGate(int index) {
-		return null;
+		throw new ArrayIndexOutOfBoundsException(0);
 	}
 
 	@Override
 	public IndexedInputGate[] getAllInputGates() {
-		return null;
+		return new IndexedInputGate[0];
 	}
 
 	@Override

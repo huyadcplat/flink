@@ -23,9 +23,9 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.fnexecution.v1.FlinkFnApi;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.api.TableConfig;
-import org.apache.flink.table.data.JoinedRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.binary.BinaryRowData;
+import org.apache.flink.table.data.utils.JoinedRowData;
 import org.apache.flink.table.functions.AggregateFunction;
 import org.apache.flink.table.functions.python.PythonEnv;
 import org.apache.flink.table.functions.python.PythonFunctionInfo;
@@ -36,8 +36,11 @@ import org.apache.flink.table.runtime.arrow.serializers.RowDataArrowSerializer;
 import org.apache.flink.table.runtime.generated.GeneratedProjection;
 import org.apache.flink.table.runtime.generated.Projection;
 import org.apache.flink.table.runtime.operators.python.AbstractStatelessFunctionOperator;
+import org.apache.flink.table.runtime.operators.python.utils.StreamRecordRowDataWrappingCollector;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.Preconditions;
+
+import static org.apache.flink.streaming.api.utils.PythonOperatorUtils.getUserDefinedFunctionProto;
 
 /**
  * The Abstract class of Arrow Aggregate Operator for Pandas {@link AggregateFunction}.
@@ -55,7 +58,7 @@ public abstract class AbstractArrowPythonAggregateFunctionOperator
 	/**
 	 * The Pandas {@link AggregateFunction}s to be executed.
 	 */
-	private final PythonFunctionInfo[] pandasAggFunctions;
+	protected final PythonFunctionInfo[] pandasAggFunctions;
 
 	protected final int[] groupingSet;
 

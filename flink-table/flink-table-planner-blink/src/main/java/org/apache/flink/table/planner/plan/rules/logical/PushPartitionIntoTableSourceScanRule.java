@@ -148,11 +148,17 @@ public class PushPartitionIntoTableSourceScanRule extends RelOptRule {
 			partitions,
 			finalPartitionPredicate);
 		// prune partitions
-		Optional<List<Map<String, String>>> remainingPartitions =
-			readPartitionsAndPrune(context, tableSourceTable, defaultPruner, allPredicates._1(), inputFieldNames);
+		List<Map<String, String>> remainingPartitions =
+			readPartitionsAndPrune(
+					rexBuilder,
+					context,
+					tableSourceTable,
+					defaultPruner,
+					allPredicates._1(),
+					inputFieldNames);
 		// apply push down
 		DynamicTableSource dynamicTableSource = tableSourceTable.tableSource().copy();
-		remainingPartitions.ifPresent(((SupportsPartitionPushDown) dynamicTableSource)::applyPartitions);
+		((SupportsPartitionPushDown) dynamicTableSource).applyPartitions(remainingPartitions);
 
 		// build new statistic
 		TableStats newTableStat = null;
@@ -160,8 +166,8 @@ public class PushPartitionIntoTableSourceScanRule extends RelOptRule {
 		ObjectPath tablePath = identifier.toObjectPath();
 		Optional<Catalog> catalogOptional = context.getCatalogManager().getCatalog(identifier.getCatalogName());
 		Optional<TableStats> partitionStats;
-		if (remainingPartitions.isPresent() && catalogOptional.isPresent()) {
-			for (Map<String, String> partition: remainingPartitions.get()) {
+		if (catalogOptional.isPresent()) {
+			for (Map<String, String> partition: remainingPartitions) {
 				partitionStats = getPartitionStats(catalogOptional.get(), tablePath, partition);
 				if (!partitionStats.isPresent()) {
 					// clear all information before
@@ -177,12 +183,12 @@ public class PushPartitionIntoTableSourceScanRule extends RelOptRule {
 			.tableStats(newTableStat)
 			.build();
 
-		String extraDigest = remainingPartitions.map(partition -> ("partitions=[" +
-			String.join(", ", partition
+		String extraDigest = "partitions=[" +
+			String.join(", ", remainingPartitions
 				.stream()
 				.map(Object::toString)
 				.toArray(String[]::new)) +
-			"]")).orElse("partitions=[]");
+			"]";
 		TableSourceTable newTableSourceTable = tableSourceTable.copy(dynamicTableSource, newStatistic, new String[]{extraDigest});
 		LogicalTableScan newScan = LogicalTableScan.create(scan.getCluster(), newTableSourceTable, scan.getHints());
 
@@ -223,7 +229,8 @@ public class PushPartitionIntoTableSourceScanRule extends RelOptRule {
 		});
 	}
 
-	private Optional<List<Map<String, String>>> readPartitionsAndPrune(
+	private List<Map<String, String>> readPartitionsAndPrune(
+			RexBuilder rexBuilder,
 			FlinkContext context,
 			TableSourceTable tableSourceTable,
 			Function<List<Map<String, String>>, List<Map<String, String>>> pruner,
@@ -231,29 +238,23 @@ public class PushPartitionIntoTableSourceScanRule extends RelOptRule {
 			List<String> inputFieldNames) {
 		// get partitions from table/catalog and prune
 		Optional<Catalog> catalogOptional = context.getCatalogManager().getCatalog(tableSourceTable.tableIdentifier().getCatalogName());
-		List<Map<String, String>> remainingPartitions;
-		Optional<List<Map<String, String>>> optionalPartitions;
 
 		DynamicTableSource dynamicTableSource = tableSourceTable.tableSource();
 		ObjectIdentifier identifier = tableSourceTable.tableIdentifier();
-		try {
-			optionalPartitions = ((SupportsPartitionPushDown) dynamicTableSource).listPartitions();
-			if (optionalPartitions.isPresent() && !optionalPartitions.get().isEmpty()) {
-				remainingPartitions = pruner.apply(optionalPartitions.get());
-				return remainingPartitions != null ? Optional.of(remainingPartitions) : Optional.empty();
-			} else {
-				return Optional.empty();
-			}
-		} catch (UnsupportedOperationException e) {
+		Optional<List<Map<String, String>>> optionalPartitions = ((SupportsPartitionPushDown) dynamicTableSource).listPartitions();
+		if (optionalPartitions.isPresent()) {
+			return pruner.apply(optionalPartitions.get());
+		} else {
 			// check catalog whether is available
 			// we will read partitions from catalog if table doesn't support listPartitions.
 			if (!catalogOptional.isPresent()) {
 				throw new TableException(
 					String.format("Table %s must from a catalog, but %s is not a catalog",
-						identifier.asSummaryString(), identifier.getCatalogName()), e);
+						identifier.asSummaryString(), identifier.getCatalogName()));
 			}
 			try {
 				return readPartitionFromCatalogAndPrune(
+					rexBuilder,
 					context,
 					catalogOptional.get(),
 					identifier,
@@ -261,7 +262,7 @@ public class PushPartitionIntoTableSourceScanRule extends RelOptRule {
 					partitionPredicate,
 					pruner);
 			} catch (TableNotExistException tableNotExistException) {
-				throw new TableException(String.format("Table %s is not found in catalog.", identifier.asSummaryString()), e);
+				throw new TableException(String.format("Table %s is not found in catalog.", identifier.asSummaryString()));
 			} catch (TableNotPartitionedException tableNotPartitionedException) {
 				throw new TableException(
 					String.format("Table %s is not a partitionable source. Validator should have checked it.", identifier.asSummaryString()),
@@ -270,7 +271,8 @@ public class PushPartitionIntoTableSourceScanRule extends RelOptRule {
 		}
 	}
 
-	private Optional<List<Map<String, String>>> readPartitionFromCatalogAndPrune(
+	private List<Map<String, String>> readPartitionFromCatalogAndPrune(
+			RexBuilder rexBuilder,
 			FlinkContext context,
 			Catalog catalog,
 			ObjectIdentifier tableIdentifier,
@@ -281,6 +283,7 @@ public class PushPartitionIntoTableSourceScanRule extends RelOptRule {
 		ObjectPath tablePath = tableIdentifier.toObjectPath();
 		// build filters
 		RexNodeToExpressionConverter converter = new RexNodeToExpressionConverter(
+			rexBuilder,
 			allFieldNames.toArray(new String[0]),
 			context.getFunctionCatalog(),
 			context.getCatalogManager(),
@@ -297,33 +300,26 @@ public class PushPartitionIntoTableSourceScanRule extends RelOptRule {
 			}
 		}
 		try {
-			List<Map<String, String>> remainingPartitions = catalog.listPartitionsByFilter(tablePath, partitionFilters)
+			return catalog.listPartitionsByFilter(tablePath, partitionFilters)
 				.stream()
 				.map(CatalogPartitionSpec::getPartitionSpec)
 				.collect(Collectors.toList());
-			return Optional.of(remainingPartitions);
 		} catch (UnsupportedOperationException e) {
 			return readPartitionFromCatalogWithoutFilterAndPrune(catalog, tablePath, pruner);
 		}
 	}
 
-	private Optional<List<Map<String, String>>> readPartitionFromCatalogWithoutFilterAndPrune(
+	private List<Map<String, String>> readPartitionFromCatalogWithoutFilterAndPrune(
 			Catalog catalog,
 			ObjectPath tablePath,
 			Function<List<Map<String, String>>, List<Map<String, String>>> pruner)
 			throws TableNotExistException, CatalogException, TableNotPartitionedException {
-		List<Map<String, String>> allPartitions, remainingPartitions;
-		allPartitions = catalog.listPartitions(tablePath)
+		List<Map<String, String>> allPartitions = catalog.listPartitions(tablePath)
 			.stream()
 			.map(CatalogPartitionSpec::getPartitionSpec)
 			.collect(Collectors.toList());
 		// prune partitions
-		if (allPartitions.size() > 0) {
-			remainingPartitions = pruner.apply(allPartitions);
-			return remainingPartitions != null ? Optional.of(remainingPartitions) : Optional.empty();
-		} else {
-			return Optional.empty();
-		}
+		return pruner.apply(allPartitions);
 	}
 
 	private Optional<TableStats> getPartitionStats(Catalog catalog, ObjectPath tablePath, Map<String, String> partition) {

@@ -42,9 +42,13 @@ cdef class TableFunctionRowCoderImpl(FlattenRowCoderImpl):
         self._end_message[0] = 0x00
 
     cpdef void encode_to_stream(self, iter_value, LengthPrefixOutputStream output_stream):
+        cdef is_row_or_tuple = False
         if iter_value:
+            if isinstance(iter_value, (tuple, Row)):
+                iter_value = [iter_value]
+                is_row_or_tuple = True
             for value in iter_value:
-                if self._field_count == 1:
+                if self._field_count == 1 and not is_row_or_tuple:
                     value = (value,)
                 self._encode_one_row(value, output_stream)
         # write 0x00 as end message
@@ -54,23 +58,57 @@ cdef class TableFunctionRowCoderImpl(FlattenRowCoderImpl):
         if self._end_message:
             free(self._end_message)
 
-cdef class DataStreamStatelessFlatMapCoderImpl(BaseCoderImpl):
+
+cdef class AggregateFunctionRowCoderImpl(FlattenRowCoderImpl):
+
+    def __init__(self, flatten_row_coder):
+        super(AggregateFunctionRowCoderImpl, self).__init__(flatten_row_coder._field_coders)
+
+    cpdef void encode_to_stream(self, iter_value, LengthPrefixOutputStream output_stream):
+        if iter_value:
+            for value in iter_value:
+                self._encode_one_row_with_row_kind(
+                    value, output_stream, value.get_row_kind().value)
+
+
+cdef class DataStreamFlatMapCoderImpl(BaseCoderImpl):
 
     def __init__(self, field_coder):
         self._single_field_coder = field_coder
+        self._end_message = <char*> malloc(1)
+        self._end_message[0] = 0x00
 
     cpdef void encode_to_stream(self, iter_value, LengthPrefixOutputStream output_stream):
         if iter_value:
             for value in iter_value:
                 self._single_field_coder.encode_to_stream(value, output_stream)
+        output_stream.write(self._end_message, 1)
 
     cpdef object decode_from_stream(self, LengthPrefixInputStream input_stream):
         return self._single_field_coder.decode_from_stream(input_stream)
 
-cdef class DataStreamStatelessMapCoderImpl(FlattenRowCoderImpl):
+    def __dealloc__(self):
+        if self._end_message:
+            free(self._end_message)
+
+
+cdef class DataStreamCoFlatMapCoderImpl(BaseCoderImpl):
 
     def __init__(self, field_coder):
-        super(DataStreamStatelessMapCoderImpl, self).__init__([field_coder])
+        self._single_field_coder = field_coder
+
+    cpdef void encode_to_stream(self, iter_value, LengthPrefixOutputStream output_stream):
+        for value in iter_value:
+            self._single_field_coder.encode_to_stream(value, output_stream)
+
+    cpdef object decode_from_stream(self, LengthPrefixInputStream input_stream):
+        return self._single_field_coder.decode_from_stream(input_stream)
+
+
+cdef class DataStreamMapCoderImpl(FlattenRowCoderImpl):
+
+    def __init__(self, field_coder):
+        super(DataStreamMapCoderImpl, self).__init__([field_coder])
         self._single_field_coder = self._field_coders[0]
 
     cpdef void encode_to_stream(self, value, LengthPrefixOutputStream output_stream):
@@ -80,7 +118,7 @@ cdef class DataStreamStatelessMapCoderImpl(FlattenRowCoderImpl):
         output_stream.write(self._tmp_output_data, self._tmp_output_pos)
         self._tmp_output_pos = 0
 
-    cpdef void _encode_field(self, CoderType coder_type, TypeName field_type, FieldCoder field_coder,
+    cdef void _encode_field(self, CoderType coder_type, TypeName field_type, FieldCoder field_coder,
                         item):
         if coder_type == SIMPLE:
             self._encode_field_simple(field_type, item)
@@ -89,7 +127,7 @@ cdef class DataStreamStatelessMapCoderImpl(FlattenRowCoderImpl):
             self._encode_field_complex(field_type, field_coder, item)
             self._encode_data_stream_field_complex(field_type, field_coder, item)
 
-    cpdef object _decode_field(self, CoderType coder_type, TypeName field_type,
+    cdef object _decode_field(self, CoderType coder_type, TypeName field_type,
                         FieldCoder field_coder):
         if coder_type == SIMPLE:
             decoded_obj = self._decode_field_simple(field_type)
@@ -188,15 +226,22 @@ cdef class FlattenRowCoderImpl(BaseCoderImpl):
         self._mask_byte_search_table[5] = 0x04
         self._mask_byte_search_table[6] = 0x02
         self._mask_byte_search_table[7] = 0x01
-        for i in range(2 ** ROW_KIND_BIT_SIZE):
-            self._row_kind_byte_table[i] = i << (8 - ROW_KIND_BIT_SIZE)
+        self._row_kind_byte_table[0] = 0x00
+        self._row_kind_byte_table[1] = 0x80
+        self._row_kind_byte_table[2] = 0x40
+        self._row_kind_byte_table[3] = 0xC0
         for i in range(self._field_count):
             self._field_type[i] = self._field_coders[i].type_name()
             self._field_coder_type[i] = self._field_coders[i].coder_type()
 
-    cdef void _encode_one_row(self, value, LengthPrefixOutputStream output_stream):
+    cdef void _encode_one_row_to_buffer(self, value, unsigned char row_kind_value):
         cdef size_t i
-        self._write_mask(value, self._leading_complete_bytes_num, self._remaining_bits_num, 0)
+        self._write_mask(
+            value,
+            self._leading_complete_bytes_num,
+            self._remaining_bits_num,
+            row_kind_value,
+            self._field_count)
         for i in range(self._field_count):
             item = value[i]
             if item is not None:
@@ -205,6 +250,19 @@ cdef class FlattenRowCoderImpl(BaseCoderImpl):
                 else:
                     self._encode_field_complex(self._field_type[i], self._field_coders[i], item)
 
+    cpdef bytes encode_nested(self, value):
+        self._encode_one_row_to_buffer(value, 0)
+        cdef size_t pos
+        pos = self._tmp_output_pos
+        self._tmp_output_pos = 0
+        return self._tmp_output_data[:pos]
+
+    cdef void _encode_one_row(self, value, LengthPrefixOutputStream output_stream):
+        self._encode_one_row_with_row_kind(value, output_stream, 0)
+
+    cdef void _encode_one_row_with_row_kind(
+            self, value, LengthPrefixOutputStream output_stream, unsigned char row_kind_value):
+        self._encode_one_row_to_buffer(value, row_kind_value)
         output_stream.write(self._tmp_output_data, self._tmp_output_pos)
         self._tmp_output_pos = 0
 
@@ -339,15 +397,23 @@ cdef class FlattenRowCoderImpl(BaseCoderImpl):
                                      milliseconds % 1000 * 1000 + nanoseconds // 1000)
             return (<LocalZonedTimestampCoderImpl> field_coder).timezone.localize(
                 datetime.datetime.utcfromtimestamp(seconds).replace(microsecond=microseconds))
-        elif field_type == ARRAY:
-            # Array
+        elif field_type == BASIC_ARRAY:
+            # Basic Array
             length = self._decode_int()
-            value_coder = (<ArrayCoderImpl> field_coder).elem_coder
+            value_coder = (<BasicArrayCoderImpl> field_coder).elem_coder
             value_type = value_coder.type_name()
             value_coder_type = value_coder.coder_type()
             return [
                 self._decode_field(value_coder_type, value_type, value_coder) if self._decode_byte()
                 else None for _ in range(length)]
+        elif field_type == PRIMITIVE_ARRAY:
+            # Primitive Array
+            length = self._decode_int()
+            value_coder = (<PrimitiveArrayCoderImpl> field_coder).elem_coder
+            value_type = value_coder.type_name()
+            value_coder_type = value_coder.coder_type()
+            return [self._decode_field(value_coder_type, value_type, value_coder)
+                    for _ in range(length)]
         elif field_type == MAP:
             # Map
             key_coder = (<MapCoderImpl> field_coder).key_coder
@@ -368,6 +434,7 @@ cdef class FlattenRowCoderImpl(BaseCoderImpl):
         elif field_type == ROW:
             # Row
             row_field_coders = (<RowCoderImpl> field_coder).field_coders
+            row_field_names = (<RowCoderImpl> field_coder).field_names
             row_field_count = len(row_field_coders)
             mask = <bint*> malloc((row_field_count + ROW_KIND_BIT_SIZE) * sizeof(bint))
             leading_complete_bytes_num = (row_field_count + ROW_KIND_BIT_SIZE) // 8
@@ -379,9 +446,10 @@ cdef class FlattenRowCoderImpl(BaseCoderImpl):
                             row_field_coders[i].type_name(),
                             row_field_coders[i])
                         for i in range(row_field_count)])
+            row.set_field_names(row_field_names)
             row_kind_value = 0
             for i in range(ROW_KIND_BIT_SIZE):
-                row_kind_value += mask[ROW_KIND_BIT_SIZE - i - 1] * 2 ** i
+                row_kind_value += mask[i] * 2 ** i
             row.set_row_kind(RowKind(row_kind_value))
             free(mask)
             return row
@@ -510,10 +578,10 @@ cdef class FlattenRowCoderImpl(BaseCoderImpl):
             else:
                 self._encode_bigint(timestamp_milliseconds)
                 self._encode_int(nanoseconds)
-        elif field_type == ARRAY:
-            # Array
+        elif field_type == BASIC_ARRAY:
+            # Basic Array
             length = len(item)
-            value_coder = (<ArrayCoderImpl> field_coder).elem_coder
+            value_coder = (<BasicArrayCoderImpl> field_coder).elem_coder
             value_type = value_coder.type_name()
             value_coder_type = value_coder.coder_type()
             self._encode_int(length)
@@ -524,6 +592,16 @@ cdef class FlattenRowCoderImpl(BaseCoderImpl):
                 else:
                     self._encode_byte(True)
                     self._encode_field(value_coder_type, value_type, value_coder, value)
+        elif field_type == PRIMITIVE_ARRAY:
+            # Primitive Array
+            length = len(item)
+            value_coder = (<PrimitiveArrayCoderImpl> field_coder).elem_coder
+            value_type = value_coder.type_name()
+            value_coder_type = value_coder.coder_type()
+            self._encode_int(length)
+            for i in range(length):
+                value = item[i]
+                self._encode_field(value_coder_type, value_type, value_coder, value)
         elif field_type == MAP:
             # Map
             length = len(item)
@@ -552,7 +630,7 @@ cdef class FlattenRowCoderImpl(BaseCoderImpl):
             remaining_bits_num = row_field_count % 8
             row_value = list(item)
             row_kind_value = item._row_kind.value
-            self._write_mask(row_value, leading_complete_bytes_num, remaining_bits_num, row_kind_value)
+            self._write_mask(row_value, leading_complete_bytes_num, remaining_bits_num, row_kind_value, row_field_count)
             for i in range(row_field_count):
                 field_item = row_value[i]
                 row_field_coder = row_field_coders[i]
@@ -619,13 +697,12 @@ cdef class FlattenRowCoderImpl(BaseCoderImpl):
         self._tmp_output_pos += length
 
     cdef void _write_mask(self, value, size_t leading_complete_bytes_num,
-                          size_t remaining_bits_num, unsigned char row_kind_value):
+                          size_t remaining_bits_num, unsigned char row_kind_value, size_t field_count):
         cdef size_t field_pos, index
         cdef unsigned char*bit_map_byte_search_table
         cdef unsigned char b, i
         field_pos = 0
         bit_map_byte_search_table = self._mask_byte_search_table
-        field_count = self._field_count
 
         # first byte contains the row kind bits
         b = self._row_kind_byte_table[row_kind_value]
@@ -771,7 +848,7 @@ cdef class LocalZonedTimestampCoderImpl(TimestampCoderImpl):
     cpdef TypeName type_name(self):
         return LOCAL_ZONED_TIMESTAMP
 
-cdef class ArrayCoderImpl(FieldCoder):
+cdef class BasicArrayCoderImpl(FieldCoder):
     def __cinit__(self, elem_coder):
         self.elem_coder = elem_coder
 
@@ -779,7 +856,17 @@ cdef class ArrayCoderImpl(FieldCoder):
         return COMPLEX
 
     cpdef TypeName type_name(self):
-        return ARRAY
+        return BASIC_ARRAY
+
+cdef class PrimitiveArrayCoderImpl(FieldCoder):
+    def __cinit__(self, elem_coder):
+        self.elem_coder = elem_coder
+
+    cpdef CoderType coder_type(self):
+        return COMPLEX
+
+    cpdef TypeName type_name(self):
+        return PRIMITIVE_ARRAY
 
 cdef class MapCoderImpl(FieldCoder):
     def __cinit__(self, key_coder, value_coder):
@@ -793,8 +880,9 @@ cdef class MapCoderImpl(FieldCoder):
         return MAP
 
 cdef class RowCoderImpl(FieldCoder):
-    def __cinit__(self, field_coders):
+    def __cinit__(self, field_coders, field_names):
         self.field_coders = field_coders
+        self.field_names = field_names
 
     cpdef CoderType coder_type(self):
         return COMPLEX

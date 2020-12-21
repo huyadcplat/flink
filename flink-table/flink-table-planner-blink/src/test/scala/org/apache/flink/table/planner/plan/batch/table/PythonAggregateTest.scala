@@ -35,7 +35,7 @@ class PythonAggregateTest extends TableTestBase {
 
     val resultTable = sourceTable.select(func('a, 'c))
 
-    util.verifyPlan(resultTable)
+    util.verifyExecPlan(resultTable)
   }
 
   @Test
@@ -47,6 +47,18 @@ class PythonAggregateTest extends TableTestBase {
     val resultTable = sourceTable.groupBy('b)
       .select('b, func('a, 'c))
 
-    util.verifyPlan(resultTable)
+    util.verifyExecPlan(resultTable)
+  }
+
+  @Test(expected = classOf[TableException])
+  def testMixedUsePandasAggAndJavaAgg(): Unit = {
+    val util = batchTestUtil()
+    val sourceTable = util.addTableSource[(Int, Long, Int)]("MyTable", 'a, 'b, 'c)
+    val func = new PandasAggregateFunction
+
+    val resultTable = sourceTable.groupBy('b)
+      .select('b, func('a, 'c), 'a.count())
+
+    util.verifyExecPlan(resultTable)
   }
 }

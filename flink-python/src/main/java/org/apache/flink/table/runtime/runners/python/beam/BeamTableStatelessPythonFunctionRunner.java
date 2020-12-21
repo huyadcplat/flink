@@ -22,9 +22,8 @@ import org.apache.flink.annotation.Internal;
 import org.apache.flink.fnexecution.v1.FlinkFnApi;
 import org.apache.flink.python.env.PythonEnvironmentManager;
 import org.apache.flink.python.metric.FlinkMetricContainer;
-import org.apache.flink.streaming.api.runners.python.beam.BeamStatelessPythonFunctionRunner;
-import org.apache.flink.table.runtime.typeutils.PythonTypeUtils;
-import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.runtime.memory.MemoryManager;
+import org.apache.flink.streaming.api.runners.python.beam.BeamPythonFunctionRunner;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.Preconditions;
 
@@ -32,11 +31,13 @@ import org.apache.beam.model.pipeline.v1.RunnerApi;
 
 import java.util.Map;
 
+import static org.apache.flink.table.runtime.typeutils.PythonTypeUtils.getRowCoderProto;
+
 /**
  * A {@link BeamTableStatelessPythonFunctionRunner} used to execute Python stateless functions.
  */
 @Internal
-public class BeamTableStatelessPythonFunctionRunner extends BeamStatelessPythonFunctionRunner {
+public class BeamTableStatelessPythonFunctionRunner extends BeamPythonFunctionRunner {
 
 	private final RowType inputType;
 	private final RowType outputType;
@@ -52,27 +53,14 @@ public class BeamTableStatelessPythonFunctionRunner extends BeamStatelessPythonF
 		FlinkFnApi.UserDefinedFunctions userDefinedFunctions,
 		String coderUrn,
 		Map<String, String> jobOptions,
-		FlinkMetricContainer flinkMetricContainer) {
-		super(taskName, environmentManager, functionUrn, jobOptions, flinkMetricContainer);
+		FlinkMetricContainer flinkMetricContainer,
+		MemoryManager memoryManager,
+		double managedMemoryFraction) {
+		super(taskName, environmentManager, functionUrn, jobOptions, flinkMetricContainer, null, null, memoryManager, managedMemoryFraction);
 		this.coderUrn = Preconditions.checkNotNull(coderUrn);
 		this.inputType = Preconditions.checkNotNull(inputType);
 		this.outputType = Preconditions.checkNotNull(outputType);
 		this.userDefinedFunctions = userDefinedFunctions;
-	}
-
-	private RunnerApi.Coder getRowCoderProto(RowType rowType) {
-		return RunnerApi.Coder.newBuilder()
-			.setSpec(
-				RunnerApi.FunctionSpec.newBuilder()
-					.setUrn(coderUrn)
-					.setPayload(org.apache.beam.vendor.grpc.v1p26p0.com.google.protobuf.ByteString.copyFrom(
-						toProtoType(rowType).getRowSchema().toByteArray()))
-					.build())
-			.build();
-	}
-
-	private FlinkFnApi.Schema.FieldType toProtoType(LogicalType logicalType) {
-		return logicalType.accept(new PythonTypeUtils.LogicalTypeToProtoTypeConverter());
 	}
 
 	@Override
@@ -82,11 +70,11 @@ public class BeamTableStatelessPythonFunctionRunner extends BeamStatelessPythonF
 
 	@Override
 	protected RunnerApi.Coder getInputCoderProto() {
-		return getRowCoderProto(inputType);
+		return getRowCoderProto(inputType, coderUrn);
 	}
 
 	@Override
 	protected RunnerApi.Coder getOutputCoderProto() {
-		return getRowCoderProto(outputType);
+		return getRowCoderProto(outputType, coderUrn);
 	}
 }

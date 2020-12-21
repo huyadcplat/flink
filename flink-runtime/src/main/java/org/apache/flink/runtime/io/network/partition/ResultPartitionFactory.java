@@ -25,17 +25,17 @@ import org.apache.flink.runtime.io.network.NettyShuffleEnvironment;
 import org.apache.flink.runtime.io.network.buffer.BufferCompressor;
 import org.apache.flink.runtime.io.network.buffer.BufferPool;
 import org.apache.flink.runtime.io.network.buffer.BufferPoolFactory;
-import org.apache.flink.runtime.io.network.buffer.BufferPoolOwner;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.ProcessorArchitecture;
-import org.apache.flink.util.function.FunctionWithException;
+import org.apache.flink.util.function.SupplierWithException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.function.BiFunction;
 
 /**
  * Factory for {@link ResultPartition} to use in {@link NettyShuffleEnvironment}.
@@ -64,6 +64,12 @@ public class ResultPartitionFactory {
 
 	private final int maxBuffersPerChannel;
 
+	private final int sortShuffleMinBuffers;
+
+	private final int sortShuffleMinParallelism;
+
+	private final boolean sslEnabled;
+
 	public ResultPartitionFactory(
 		ResultPartitionManager partitionManager,
 		FileChannelManager channelManager,
@@ -74,7 +80,10 @@ public class ResultPartitionFactory {
 		int networkBufferSize,
 		boolean blockingShuffleCompressionEnabled,
 		String compressionCodec,
-		int maxBuffersPerChannel) {
+		int maxBuffersPerChannel,
+		int sortShuffleMinBuffers,
+		int sortShuffleMinParallelism,
+		boolean sslEnabled) {
 
 		this.partitionManager = partitionManager;
 		this.channelManager = channelManager;
@@ -86,6 +95,9 @@ public class ResultPartitionFactory {
 		this.blockingShuffleCompressionEnabled = blockingShuffleCompressionEnabled;
 		this.compressionCodec = compressionCodec;
 		this.maxBuffersPerChannel = maxBuffersPerChannel;
+		this.sortShuffleMinBuffers = sortShuffleMinBuffers;
+		this.sortShuffleMinParallelism = sortShuffleMinParallelism;
+		this.sslEnabled = sslEnabled;
 	}
 
 	public ResultPartition create(
@@ -110,7 +122,7 @@ public class ResultPartitionFactory {
 			ResultPartitionType type,
 			int numberOfSubpartitions,
 			int maxParallelism,
-			FunctionWithException<BufferPoolOwner, BufferPool, IOException> bufferPoolFactory) {
+			SupplierWithException<BufferPool, IOException> bufferPoolFactory) {
 		BufferCompressor bufferCompressor = null;
 		if (type.isBlocking() && blockingShuffleCompressionEnabled) {
 			bufferCompressor = new BufferCompressor(networkBufferSize, compressionCodec);
@@ -119,7 +131,8 @@ public class ResultPartitionFactory {
 		ResultSubpartition[] subpartitions = new ResultSubpartition[numberOfSubpartitions];
 
 		final ResultPartition partition;
-		if (type == ResultPartitionType.PIPELINED || type == ResultPartitionType.PIPELINED_BOUNDED) {
+		if (type == ResultPartitionType.PIPELINED || type == ResultPartitionType.PIPELINED_BOUNDED ||
+				type == ResultPartitionType.PIPELINED_APPROXIMATE) {
 			final PipelinedResultPartition pipelinedPartition = new PipelinedResultPartition(
 				taskNameWithSubtaskAndId,
 				partitionIndex,
@@ -131,32 +144,55 @@ public class ResultPartitionFactory {
 				bufferCompressor,
 				bufferPoolFactory);
 
+			BiFunction<Integer, PipelinedResultPartition, PipelinedSubpartition> factory;
+			if (type == ResultPartitionType.PIPELINED_APPROXIMATE) {
+				factory = PipelinedApproximateSubpartition::new;
+			} else {
+				factory = PipelinedSubpartition::new;
+			}
+
 			for (int i = 0; i < subpartitions.length; i++) {
-				subpartitions[i] = new PipelinedSubpartition(i, pipelinedPartition);
+				subpartitions[i] = factory.apply(i, pipelinedPartition);
 			}
 
 			partition = pipelinedPartition;
 		}
 		else if (type == ResultPartitionType.BLOCKING || type == ResultPartitionType.BLOCKING_PERSISTENT) {
-			final BoundedBlockingResultPartition blockingPartition = new BoundedBlockingResultPartition(
-				taskNameWithSubtaskAndId,
-				partitionIndex,
-				id,
-				type,
-				subpartitions,
-				maxParallelism,
-				partitionManager,
-				bufferCompressor,
-				bufferPoolFactory);
+			if (numberOfSubpartitions >= sortShuffleMinParallelism) {
+				partition = new SortMergeResultPartition(
+					taskNameWithSubtaskAndId,
+					partitionIndex,
+					id,
+					type,
+					subpartitions.length,
+					maxParallelism,
+					networkBufferSize,
+					partitionManager,
+					channelManager.createChannel().getPath(),
+					bufferCompressor,
+					bufferPoolFactory);
+			} else {
+				final BoundedBlockingResultPartition blockingPartition = new BoundedBlockingResultPartition(
+					taskNameWithSubtaskAndId,
+					partitionIndex,
+					id,
+					type,
+					subpartitions,
+					maxParallelism,
+					partitionManager,
+					bufferCompressor,
+					bufferPoolFactory);
 
 			initializeBoundedBlockingPartitions(
 				subpartitions,
 				blockingPartition,
 				blockingSubpartitionType,
 				networkBufferSize,
-				channelManager);
+				channelManager,
+				sslEnabled);
 
-			partition = blockingPartition;
+				partition = blockingPartition;
+			}
 		}
 		else {
 			throw new IllegalArgumentException("Unrecognized ResultPartitionType: " + type);
@@ -172,12 +208,13 @@ public class ResultPartitionFactory {
 			BoundedBlockingResultPartition parent,
 			BoundedBlockingSubpartitionType blockingSubpartitionType,
 			int networkBufferSize,
-			FileChannelManager channelManager) {
+			FileChannelManager channelManager,
+			boolean sslEnabled) {
 		int i = 0;
 		try {
 			for (i = 0; i < subpartitions.length; i++) {
 				final File spillFile = channelManager.createChannel().getPathFile();
-				subpartitions[i] = blockingSubpartitionType.create(i, parent, spillFile, networkBufferSize);
+				subpartitions[i] = blockingSubpartitionType.create(i, parent, spillFile, networkBufferSize, sslEnabled);
 			}
 		}
 		catch (IOException e) {
@@ -206,22 +243,24 @@ public class ResultPartitionFactory {
 	 * stuck problem if the minimum pool size is exactly equal to the number of subpartitions, because every subpartition
 	 * might maintain a partial unfilled buffer.
 	 *
-	 * <p>2. Increases one more buffer for every output LocalBufferPool to void performance regression if processing input is
+	 * <p>2. Increases one more buffer for every output LocalBufferPool to avoid performance regression if processing input is
 	 * based on at-least one buffer available on output side.
 	 */
 	@VisibleForTesting
-	FunctionWithException<BufferPoolOwner, BufferPool, IOException> createBufferPoolFactory(
+	SupplierWithException<BufferPool, IOException> createBufferPoolFactory(
 			int numberOfSubpartitions,
 			ResultPartitionType type) {
-		return bufferPoolOwner -> {
+		return () -> {
 			int maxNumberOfMemorySegments = type.isBounded() ?
 				numberOfSubpartitions * networkBuffersPerChannel + floatingNetworkBuffersPerGate : Integer.MAX_VALUE;
+			int numRequiredBuffers = !type.isPipelined() && numberOfSubpartitions >= sortShuffleMinParallelism ?
+				sortShuffleMinBuffers : numberOfSubpartitions + 1;
+
 			// If the partition type is back pressure-free, we register with the buffer pool for
 			// callbacks to release memory.
 			return bufferPoolFactory.createBufferPool(
-				numberOfSubpartitions + 1,
+				numRequiredBuffers,
 				maxNumberOfMemorySegments,
-				type.hasBackPressure() ? null : bufferPoolOwner,
 				numberOfSubpartitions,
 				maxBuffersPerChannel);
 		};

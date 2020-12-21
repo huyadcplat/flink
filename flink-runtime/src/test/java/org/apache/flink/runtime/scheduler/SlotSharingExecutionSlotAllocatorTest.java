@@ -35,17 +35,20 @@ import org.apache.flink.runtime.jobmaster.slotpool.PhysicalSlotRequestBulkChecke
 import org.apache.flink.runtime.scheduler.SharedSlotProfileRetriever.SharedSlotProfileRetrieverFactory;
 import org.apache.flink.runtime.scheduler.SharedSlotTestingUtils.TestingPhysicalSlot;
 import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
+import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.Preconditions;
+import org.apache.flink.util.TestLogger;
 import org.apache.flink.util.function.BiConsumerWithException;
 
 import org.junit.Test;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -59,16 +62,18 @@ import java.util.stream.Stream;
 import static org.apache.flink.runtime.executiongraph.ExecutionGraphTestUtils.createRandomExecutionVertexId;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.Assert.assertThat;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
  * Test suite for {@link SlotSharingExecutionSlotAllocator}.
  */
-public class SlotSharingExecutionSlotAllocatorTest {
+public class SlotSharingExecutionSlotAllocatorTest extends TestLogger {
 	private static final Time ALLOCATION_TIMEOUT = Time.milliseconds(100L);
 	private static final ResourceProfile RESOURCE_PROFILE = ResourceProfile.fromResources(3, 5);
 
@@ -89,19 +94,6 @@ public class SlotSharingExecutionSlotAllocatorTest {
 		assertThat(askedBulks, hasSize(1));
 		assertThat(askedBulks.get(0), containsInAnyOrder(EV1, EV2));
 		assertThat(context.getSlotProfileRetrieverFactory().getAskedGroups(), containsInAnyOrder(executionSlotSharingGroup));
-	}
-
-	@Test
-	public void testSlotRequestCompletionAfterProfileCompletion() {
-		AllocationContext context = AllocationContext.newBuilder().addGroup(EV1, EV2).completeSlotProfileFutureManually().build();
-		ExecutionSlotSharingGroup executionSlotSharingGroup =
-			context.getSlotSharingStrategy().getExecutionSlotSharingGroup(EV1);
-
-		List<SlotExecutionVertexAssignment> executionVertexAssignments = context.allocateSlotsFor(EV1, EV2);
-
-		executionVertexAssignments.forEach(assignment -> assertThat(assignment.getLogicalSlotFuture().isDone(), is(false)));
-		context.getSlotProfileRetrieverFactory().completeSlotProfileFutureFor(executionSlotSharingGroup, ResourceProfile.ANY);
-		executionVertexAssignments.forEach(assignment -> assertThat(assignment.getLogicalSlotFuture().isDone(), is(true)));
 	}
 
 	@Test
@@ -156,7 +148,7 @@ public class SlotSharingExecutionSlotAllocatorTest {
 		AllocationContext context = AllocationContext
 			.newBuilder()
 			.addGroup(EV1)
-			.completePhysicalSlotFutureManually()
+			.withPhysicalSlotFutureCompletionMode(PhysicalSlotFutureCompletionMode.MANUAL)
 			.build();
 		CompletableFuture<LogicalSlot> logicalSlotFuture = context.allocateSlotsFor(EV1).get(0).getLogicalSlotFuture();
 		SlotRequestId slotRequestId = context.getSlotProvider().getFirstRequestOrFail().getSlotRequestId();
@@ -241,7 +233,7 @@ public class SlotSharingExecutionSlotAllocatorTest {
 		AllocationContext context = AllocationContext
 			.newBuilder()
 			.addGroup(EV1, EV2, EV3)
-			.completePhysicalSlotFutureManually(completePhysicalSlotFutureManually)
+			.withPhysicalSlotFutureCompletionMode(completePhysicalSlotFutureManually ? PhysicalSlotFutureCompletionMode.MANUAL : PhysicalSlotFutureCompletionMode.SUCCESS)
 			.build();
 
 		List<SlotExecutionVertexAssignment> assignments = context.allocateSlotsFor(EV1, EV2);
@@ -373,6 +365,29 @@ public class SlotSharingExecutionSlotAllocatorTest {
 		assertThat(bulk.getPendingRequests(), hasSize(0));
 	}
 
+	@Test
+	public void failLogicalSlotsIfPhysicalSlotIsFailed() {
+		final TestingPhysicalSlotRequestBulkChecker bulkChecker = new TestingPhysicalSlotRequestBulkChecker();
+		AllocationContext context = AllocationContext.newBuilder()
+			.addGroup(EV1, EV2)
+			.withBulkChecker(bulkChecker)
+			.withPhysicalSlotFutureCompletionMode(PhysicalSlotFutureCompletionMode.FAILURE)
+			.build();
+
+		final List<SlotExecutionVertexAssignment> allocatedSlots = context.allocateSlotsFor(
+			EV1,
+			EV2);
+
+		for (SlotExecutionVertexAssignment allocatedSlot : allocatedSlots) {
+			assertTrue(allocatedSlot.getLogicalSlotFuture().isCompletedExceptionally());
+		}
+
+		assertThat(bulkChecker.getBulk().getPendingRequests(), is(empty()));
+
+		final Set<SlotRequestId> requests = context.getSlotProvider().getRequests().keySet();
+		assertThat(context.getSlotProvider().getCancellations().keySet(), is(requests));
+	}
+
 	private static List<ExecutionVertexID> getAssignIds(Collection<SlotExecutionVertexAssignment> assignments) {
 		return assignments.stream().map(SlotExecutionVertexAssignment::getExecutionVertexId).collect(Collectors.toList());
 	}
@@ -383,7 +398,7 @@ public class SlotSharingExecutionSlotAllocatorTest {
 			.addGroup(EV1, EV2)
 			.addGroup(EV3)
 			.withBulkChecker(bulkChecker)
-			.completePhysicalSlotFutureManually()
+			.withPhysicalSlotFutureCompletionMode(PhysicalSlotFutureCompletionMode.MANUAL)
 			.build();
 	}
 
@@ -397,6 +412,12 @@ public class SlotSharingExecutionSlotAllocatorTest {
 		SlotRequestId slotRequestId2 = slotRequestIds.get(1);
 		context.getSlotProvider().completePhysicalSlotFutureFor(slotRequestId1, allocationId);
 		return requests.get(slotRequestId2).getSlotProfile().getPhysicalSlotResourceProfile();
+	}
+
+	private enum PhysicalSlotFutureCompletionMode {
+		SUCCESS,
+		FAILURE,
+		MANUAL,
 	}
 
 	private static class AllocationContext {
@@ -450,28 +471,20 @@ public class SlotSharingExecutionSlotAllocatorTest {
 
 		private static class Builder {
 			private final Collection<ExecutionVertexID[]> groups = new ArrayList<>();
-			private boolean completePhysicalSlotFutureManually = false;
-			private boolean completeSlotProfileFutureManually = false;
+			private PhysicalSlotFutureCompletionMode physicalSlotFutureCompletion = PhysicalSlotFutureCompletionMode.SUCCESS;
 			private boolean slotWillBeOccupiedIndefinitely = false;
 			private PhysicalSlotRequestBulkChecker bulkChecker = new TestingPhysicalSlotRequestBulkChecker();
+
+			@Nullable
+			private PhysicalSlotProvider physicalSlotProvider = null;
 
 			private Builder addGroup(ExecutionVertexID... group) {
 				groups.add(group);
 				return this;
 			}
 
-			private Builder completePhysicalSlotFutureManually() {
-				completePhysicalSlotFutureManually(true);
-				return this;
-			}
-
-			private Builder completePhysicalSlotFutureManually(boolean value) {
-				this.completePhysicalSlotFutureManually = value;
-				return this;
-			}
-
-			private Builder completeSlotProfileFutureManually() {
-				this.completeSlotProfileFutureManually = true;
+			private Builder withPhysicalSlotFutureCompletionMode(PhysicalSlotFutureCompletionMode physicalSlotFutureCompletion) {
+				this.physicalSlotFutureCompletion = physicalSlotFutureCompletion;
 				return this;
 			}
 
@@ -485,10 +498,15 @@ public class SlotSharingExecutionSlotAllocatorTest {
 				return this;
 			}
 
+			private Builder withPhysicalSlotProvider(PhysicalSlotProvider physicalSlotProvider) {
+				this.physicalSlotProvider = physicalSlotProvider;
+				return this;
+			}
+
 			private AllocationContext build() {
-				TestingPhysicalSlotProvider slotProvider = new TestingPhysicalSlotProvider(completePhysicalSlotFutureManually);
+				TestingPhysicalSlotProvider slotProvider = new TestingPhysicalSlotProvider(physicalSlotFutureCompletion);
 				TestingSharedSlotProfileRetrieverFactory sharedSlotProfileRetrieverFactory =
-					new TestingSharedSlotProfileRetrieverFactory(completeSlotProfileFutureManually);
+					new TestingSharedSlotProfileRetrieverFactory();
 				TestingSlotSharingStrategy slotSharingStrategy = TestingSlotSharingStrategy.createWithGroups(groups);
 				SlotSharingExecutionSlotAllocator allocator = new SlotSharingExecutionSlotAllocator(
 					slotProvider,
@@ -511,10 +529,10 @@ public class SlotSharingExecutionSlotAllocatorTest {
 		private final Map<SlotRequestId, PhysicalSlotRequest> requests;
 		private final Map<SlotRequestId, CompletableFuture<TestingPhysicalSlot>> responses;
 		private final Map<SlotRequestId, Throwable> cancellations;
-		private final boolean completePhysicalSlotFutureManually;
+		private final PhysicalSlotFutureCompletionMode physicalSlotFutureCompletion;
 
-		private TestingPhysicalSlotProvider(boolean completePhysicalSlotFutureManually) {
-			this.completePhysicalSlotFutureManually = completePhysicalSlotFutureManually;
+		private TestingPhysicalSlotProvider(PhysicalSlotFutureCompletionMode physicalSlotFutureCompletion) {
+			this.physicalSlotFutureCompletion = physicalSlotFutureCompletion;
 			this.requests = new HashMap<>();
 			this.responses = new HashMap<>();
 			this.cancellations = new HashMap<>();
@@ -526,9 +544,16 @@ public class SlotSharingExecutionSlotAllocatorTest {
 			requests.put(slotRequestId, physicalSlotRequest);
 			CompletableFuture<TestingPhysicalSlot> resultFuture = new CompletableFuture<>();
 			responses.put(slotRequestId, resultFuture);
-			if (!completePhysicalSlotFutureManually) {
-				completePhysicalSlotFutureFor(slotRequestId, new AllocationID());
+
+			switch (physicalSlotFutureCompletion) {
+				case SUCCESS:
+					completePhysicalSlotFutureFor(slotRequestId, new AllocationID());
+					break;
+				case FAILURE:
+					resultFuture.completeExceptionally(new FlinkException("Test failure."));
+					break;
 			}
+
 			return resultFuture.thenApply(physicalSlot -> new PhysicalSlotRequest.Result(slotRequestId, physicalSlot));
 		}
 
@@ -607,14 +632,10 @@ public class SlotSharingExecutionSlotAllocatorTest {
 	private static class TestingSharedSlotProfileRetrieverFactory implements SharedSlotProfileRetrieverFactory {
 		private final List<Set<ExecutionVertexID>> askedBulks;
 		private final List<ExecutionSlotSharingGroup> askedGroups;
-		private final Map<ExecutionSlotSharingGroup, CompletableFuture<SlotProfile>> slotProfileFutures;
-		private final boolean completeSlotProfileFutureManually;
 
-		private TestingSharedSlotProfileRetrieverFactory(boolean completeSlotProfileFutureManually) {
-			this.completeSlotProfileFutureManually = completeSlotProfileFutureManually;
+		private TestingSharedSlotProfileRetrieverFactory() {
 			this.askedBulks = new ArrayList<>();
 			this.askedGroups = new ArrayList<>();
-			this.slotProfileFutures = new IdentityHashMap<>();
 		}
 
 		@Override
@@ -622,17 +643,8 @@ public class SlotSharingExecutionSlotAllocatorTest {
 			askedBulks.add(bulk);
 			return (group, resourceProfile) -> {
 				askedGroups.add(group);
-				CompletableFuture<SlotProfile> slotProfileFuture =
-					slotProfileFutures.computeIfAbsent(group, g -> new CompletableFuture<>());
-				if (!completeSlotProfileFutureManually) {
-					completeSlotProfileFutureFor(group, resourceProfile);
-				}
-				return slotProfileFuture;
+				return SlotProfile.noLocality(resourceProfile);
 			};
-		}
-
-		private void completeSlotProfileFutureFor(ExecutionSlotSharingGroup group, ResourceProfile resourceProfile) {
-			slotProfileFutures.get(group).complete(SlotProfile.noLocality(resourceProfile));
 		}
 
 		private List<Set<ExecutionVertexID>> getAskedBulks() {

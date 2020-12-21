@@ -15,7 +15,9 @@
 #  See the License for the specific language governing permissions and
 # limitations under the License.
 ################################################################################
-
+import calendar
+import datetime
+import time
 from abc import ABC
 from typing import List, Union
 
@@ -69,6 +71,24 @@ class WrapperTypeInfo(TypeInformation):
 
     def __str__(self):
         return self._j_typeinfo.toString()
+
+    def need_conversion(self):
+        """
+        Does this type need to conversion between Python object and internal Wrapper object.
+        """
+        return False
+
+    def to_internal_type(self, obj):
+        """
+        Converts a Python object into an internal object.
+        """
+        return obj
+
+    def from_internal_type(self, obj):
+        """
+         Converts an internal object into a native Python object.
+         """
+        return obj
 
 
 class BasicTypeInfo(TypeInformation, ABC):
@@ -140,21 +160,21 @@ class SqlTimeTypeInfo(TypeInformation, ABC):
 
     @staticmethod
     def DATE():
-        return WrapperTypeInfo(
+        return DateTypeInfo(
             get_gateway().jvm.org.apache.flink.api.common.typeinfo.SqlTimeTypeInfo.DATE)
 
     @staticmethod
     def TIME():
-        return WrapperTypeInfo(
+        return TimeTypeInfo(
             get_gateway().jvm.org.apache.flink.api.common.typeinfo.SqlTimeTypeInfo.TIME)
 
     @staticmethod
     def TIMESTAMP():
-        return WrapperTypeInfo(
+        return TimestampTypeInfo(
             get_gateway().jvm.org.apache.flink.api.common.typeinfo.SqlTimeTypeInfo.TIMESTAMP)
 
 
-class PrimitiveArrayTypeInfo(TypeInformation, ABC):
+class PrimitiveArrayTypeInfo(WrapperTypeInfo, ABC):
     """
     A TypeInformation for arrays of primitive types (int, long, double, ...).
     Supports the creation of dedicated efficient serializers for these types.
@@ -209,7 +229,94 @@ class PrimitiveArrayTypeInfo(TypeInformation, ABC):
             .PrimitiveArrayTypeInfo.CHAR_PRIMITIVE_ARRAY_TYPE_INFO)
 
 
-class PickledBytesTypeInfo(TypeInformation, ABC):
+def is_primitive_array_type_info(type_info: TypeInformation):
+    return type_info in {
+        PrimitiveArrayTypeInfo.BOOLEAN_PRIMITIVE_ARRAY_TYPE_INFO(),
+        PrimitiveArrayTypeInfo.BYTE_PRIMITIVE_ARRAY_TYPE_INFO(),
+        PrimitiveArrayTypeInfo.SHORT_PRIMITIVE_ARRAY_TYPE_INFO(),
+        PrimitiveArrayTypeInfo.INT_PRIMITIVE_ARRAY_TYPE_INFO(),
+        PrimitiveArrayTypeInfo.LONG_PRIMITIVE_ARRAY_TYPE_INFO(),
+        PrimitiveArrayTypeInfo.FLOAT_PRIMITIVE_ARRAY_TYPE_INFO(),
+        PrimitiveArrayTypeInfo.DOUBLE_PRIMITIVE_ARRAY_TYPE_INFO(),
+        PrimitiveArrayTypeInfo.CHAR_PRIMITIVE_ARRAY_TYPE_INFO()
+    }
+
+
+class BasicArrayTypeInfo(WrapperTypeInfo, ABC):
+    """
+    A TypeInformation for arrays of boxed primitive types (Integer, Long, Double, ...).
+    Supports the creation of dedicated efficient serializers for these types.
+    """
+    @staticmethod
+    def BOOLEAN_ARRAY_TYPE_INFO():
+        return WrapperTypeInfo(
+            get_gateway().jvm.org.apache.flink.api.common.typeinfo
+            .BasicArrayTypeInfo.BOOLEAN_ARRAY_TYPE_INFO)
+
+    @staticmethod
+    def BYTE_ARRAY_TYPE_INFO():
+        return WrapperTypeInfo(
+            get_gateway().jvm.org.apache.flink.api.common.typeinfo
+            .BasicArrayTypeInfo.BYTE_ARRAY_TYPE_INFO)
+
+    @staticmethod
+    def SHORT_ARRAY_TYPE_INFO():
+        return WrapperTypeInfo(
+            get_gateway().jvm.org.apache.flink.api.common.typeinfo
+            .BasicArrayTypeInfo.SHORT_ARRAY_TYPE_INFO)
+
+    @staticmethod
+    def INT_ARRAY_TYPE_INFO():
+        return WrapperTypeInfo(
+            get_gateway().jvm.org.apache.flink.api.common.typeinfo
+            .BasicArrayTypeInfo.INT_ARRAY_TYPE_INFO)
+
+    @staticmethod
+    def LONG_ARRAY_TYPE_INFO():
+        return WrapperTypeInfo(
+            get_gateway().jvm.org.apache.flink.api.common.typeinfo
+            .BasicArrayTypeInfo.LONG_ARRAY_TYPE_INFO)
+
+    @staticmethod
+    def FLOAT_ARRAY_TYPE_INFO():
+        return WrapperTypeInfo(
+            get_gateway().jvm.org.apache.flink.api.common.typeinfo
+            .BasicArrayTypeInfo.FLOAT_ARRAY_TYPE_INFO)
+
+    @staticmethod
+    def DOUBLE_ARRAY_TYPE_INFO():
+        return WrapperTypeInfo(
+            get_gateway().jvm.org.apache.flink.api.common.typeinfo
+            .BasicArrayTypeInfo.DOUBLE_ARRAY_TYPE_INFO)
+
+    @staticmethod
+    def CHAR_ARRAY_TYPE_INFO():
+        return WrapperTypeInfo(
+            get_gateway().jvm.org.apache.flink.api.common.typeinfo
+            .BasicArrayTypeInfo.CHAR_ARRAY_TYPE_INFO)
+
+    @staticmethod
+    def STRING_ARRAY_TYPE_INFO():
+        return WrapperTypeInfo(
+            get_gateway().jvm.org.apache.flink.api.common.typeinfo
+            .BasicArrayTypeInfo.STRING_ARRAY_TYPE_INFO)
+
+
+def is_basic_array_type_info(type_info: TypeInformation):
+    return type_info in {
+        BasicArrayTypeInfo.BOOLEAN_ARRAY_TYPE_INFO(),
+        BasicArrayTypeInfo.BYTE_ARRAY_TYPE_INFO(),
+        BasicArrayTypeInfo.SHORT_ARRAY_TYPE_INFO(),
+        BasicArrayTypeInfo.INT_ARRAY_TYPE_INFO(),
+        BasicArrayTypeInfo.LONG_ARRAY_TYPE_INFO(),
+        BasicArrayTypeInfo.FLOAT_ARRAY_TYPE_INFO(),
+        BasicArrayTypeInfo.DOUBLE_ARRAY_TYPE_INFO(),
+        BasicArrayTypeInfo.CHAR_ARRAY_TYPE_INFO(),
+        BasicArrayTypeInfo.STRING_ARRAY_TYPE_INFO()
+    }
+
+
+class PickledBytesTypeInfo(WrapperTypeInfo, ABC):
     """
     A PickledBytesTypeInfo indicates the data is a primitive byte array generated by pickle
     serializer.
@@ -232,7 +339,9 @@ class RowTypeInfo(WrapperTypeInfo):
         self.j_types_array = get_gateway().new_array(
             get_gateway().jvm.org.apache.flink.api.common.typeinfo.TypeInformation, len(types))
         for i in range(len(types)):
-            self.j_types_array[i] = types[i].get_java_type_info()
+            wrapper_typeinfo = types[i]
+            if isinstance(wrapper_typeinfo, WrapperTypeInfo):
+                self.j_types_array[i] = wrapper_typeinfo.get_java_type_info()
 
         if field_names is None:
             self._j_typeinfo = get_gateway().jvm.org.apache.flink.api.java.typeutils.RowTypeInfo(
@@ -244,6 +353,9 @@ class RowTypeInfo(WrapperTypeInfo):
                 j_names_array[i] = field_names[i]
             self._j_typeinfo = get_gateway().jvm.org.apache.flink.api.java.typeutils.RowTypeInfo(
                 self.j_types_array, j_names_array)
+        self._need_conversion = [f.need_conversion() if isinstance(f, WrapperTypeInfo) else None
+                                 for f in types]
+        self._need_serialize_any_field = any(self._need_conversion)
         super(RowTypeInfo, self).__init__(self._j_typeinfo)
 
     def get_field_names(self) -> List[str]:
@@ -270,6 +382,54 @@ class RowTypeInfo(WrapperTypeInfo):
                                               zip(self.get_field_names(),
                                                   self.get_field_types())])
 
+    def need_conversion(self):
+        return True
+
+    def to_internal_type(self, obj):
+        if obj is None:
+            return
+
+        if self._need_serialize_any_field:
+            # Only calling to_internal_type function for fields that need conversion
+            if isinstance(obj, dict):
+                return tuple(f.to_internal_type(obj.get(n)) if c else obj.get(n)
+                             for n, f, c in zip(self._j_typeinfo.getFieldNames(), self.types,
+                                                self._need_conversion))
+            elif isinstance(obj, (tuple, list)):
+                return tuple(f.to_internal_type(v) if c else v
+                             for f, v, c in zip(self.types, obj, self._need_conversion))
+            elif hasattr(obj, "__dict__"):
+                d = obj.__dict__
+                return tuple(f.to_internal_type(d.get(n)) if c else d.get(n)
+                             for n, f, c in zip(self._j_typeinfo.getFieldNames(), self.types,
+                                                self._need_conversion))
+            else:
+                raise ValueError("Unexpected tuple %r with RowTypeInfo" % obj)
+        else:
+            if isinstance(obj, dict):
+                return tuple(obj.get(n) for n in self._j_typeinfo.getFieldNames())
+            elif isinstance(obj, (list, tuple)):
+                return tuple(obj)
+            elif hasattr(obj, "__dict__"):
+                d = obj.__dict__
+                return tuple(d.get(n) for n in self._j_typeinfo.getFieldNames())
+            else:
+                raise ValueError("Unexpected tuple %r with RowTypeInfo" % obj)
+
+    def from_internal_type(self, obj):
+        if obj is None:
+            return
+        if isinstance(obj, (tuple, list)):
+            # it's already converted by pickler
+            return obj
+        if self._need_serialize_any_field:
+            # Only calling from_internal_type function for fields that need conversion
+            values = [f.from_internal_type(v) if c else v
+                      for f, v, c in zip(self.types, obj, self._need_conversion)]
+        else:
+            values = obj
+        return tuple(values)
+
 
 class TupleTypeInfo(WrapperTypeInfo):
     """
@@ -282,7 +442,9 @@ class TupleTypeInfo(WrapperTypeInfo):
             get_gateway().jvm.org.apache.flink.api.common.typeinfo.TypeInformation, len(types))
 
         for i in range(len(types)):
-            j_types_array[i] = types[i].get_java_type_info()
+            field_type = types[i]
+            if isinstance(field_type, WrapperTypeInfo):
+                j_types_array[i] = field_type.get_java_type_info()
 
         j_typeinfo = get_gateway().jvm \
             .org.apache.flink.api.java.typeutils.TupleTypeInfo(j_types_array)
@@ -299,6 +461,84 @@ class TupleTypeInfo(WrapperTypeInfo):
 
     def __str__(self) -> str:
         return "TupleTypeInfo(%s)" % ', '.join([field_type.__str__() for field_type in self.types])
+
+
+class DateTypeInfo(WrapperTypeInfo):
+    """
+    TypeInformation for Date.
+    """
+
+    def __init__(self, j_typeinfo):
+        super(DateTypeInfo, self).__init__(j_typeinfo)
+
+    EPOCH_ORDINAL = datetime.datetime(1970, 1, 1).toordinal()
+
+    def need_conversion(self):
+        return True
+
+    def to_internal_type(self, d):
+        if d is not None:
+            return d.toordinal() - self.EPOCH_ORDINAL
+
+    def from_internal_type(self, v):
+        if v is not None:
+            return datetime.date.fromordinal(v + self.EPOCH_ORDINAL)
+
+
+class TimeTypeInfo(WrapperTypeInfo):
+    """
+    TypeInformation for Time.
+    """
+
+    EPOCH_ORDINAL = calendar.timegm(time.localtime(0)) * 10 ** 6
+
+    def __init__(self, j_typeinfo):
+        super(TimeTypeInfo, self).__init__(j_typeinfo)
+
+    def need_conversion(self):
+        return True
+
+    def to_internal_type(self, t):
+        if t is not None:
+            if t.tzinfo is not None:
+                offset = t.utcoffset()
+                offset = offset if offset else datetime.timedelta()
+                offset_microseconds =\
+                    (offset.days * 86400 + offset.seconds) * 10 ** 6 + offset.microseconds
+            else:
+                offset_microseconds = self.EPOCH_ORDINAL
+            minutes = t.hour * 60 + t.minute
+            seconds = minutes * 60 + t.second
+            return seconds * 10 ** 6 + t.microsecond - offset_microseconds
+
+    def from_internal_type(self, t):
+        if t is not None:
+            seconds, microseconds = divmod(t + self.EPOCH_ORDINAL, 10 ** 6)
+            minutes, seconds = divmod(seconds, 60)
+            hours, minutes = divmod(minutes, 60)
+            return datetime.time(hours, minutes, seconds, microseconds)
+
+
+class TimestampTypeInfo(WrapperTypeInfo):
+    """
+    TypeInformation for Timestamp.
+    """
+
+    def __init__(self, j_typeinfo):
+        super(TimestampTypeInfo, self).__init__(j_typeinfo)
+
+    def need_conversion(self):
+        return True
+
+    def to_internal_type(self, dt):
+        if dt is not None:
+            seconds = (calendar.timegm(dt.utctimetuple()) if dt.tzinfo
+                       else time.mktime(dt.timetuple()))
+            return int(seconds) * 10 ** 6 + dt.microsecond
+
+    def from_internal_type(self, ts):
+        if ts is not None:
+            return datetime.datetime.fromtimestamp(ts // 10 ** 6).replace(microsecond=ts % 10 ** 6)
 
 
 class Types(object):
@@ -384,6 +624,36 @@ class Types(object):
         else:
             raise TypeError("Invalid element type for a primitive array.")
 
+    @staticmethod
+    def BASIC_ARRAY(element_type: TypeInformation) -> TypeInformation:
+        """
+        Returns type information for arrays of boxed primitive type (such as Integer[]).
+
+        :param element_type element type of the array (e.g. Types.BOOLEAN(), Types.INT(),
+        Types.DOUBLE())
+        """
+        if element_type == Types.BOOLEAN():
+            return BasicArrayTypeInfo.BOOLEAN_ARRAY_TYPE_INFO()
+        elif element_type == Types.BYTE():
+            return BasicArrayTypeInfo.BYTE_ARRAY_TYPE_INFO()
+        elif element_type == Types.SHORT():
+            return BasicArrayTypeInfo.SHORT_ARRAY_TYPE_INFO()
+        elif element_type == Types.INT():
+            return BasicArrayTypeInfo.INT_ARRAY_TYPE_INFO()
+        elif element_type == Types.LONG():
+            return BasicArrayTypeInfo.LONG_ARRAY_TYPE_INFO()
+        elif element_type == Types.FLOAT():
+            return BasicArrayTypeInfo.FLOAT_ARRAY_TYPE_INFO()
+        elif element_type == Types.DOUBLE():
+            return BasicArrayTypeInfo.DOUBLE_ARRAY_TYPE_INFO()
+        elif element_type == Types.CHAR():
+            return BasicArrayTypeInfo.CHAR_ARRAY_TYPE_INFO()
+        elif element_type == Types.STRING():
+            return BasicArrayTypeInfo.STRING_ARRAY_TYPE_INFO()
+        else:
+            raise TypeError("Invalid element type for a boxed primitive array: %s" %
+                            str(element_type))
+
 
 def _from_java_type(j_type_info: JavaObject) -> TypeInformation:
     gateway = get_gateway()
@@ -439,6 +709,28 @@ def _from_java_type(j_type_info: JavaObject) -> TypeInformation:
         return Types.PRIMITIVE_ARRAY(Types.DOUBLE())
     elif _is_instance_of(j_type_info, JPrimitiveArrayTypeInfo.CHAR_PRIMITIVE_ARRAY_TYPE_INFO):
         return Types.PRIMITIVE_ARRAY(Types.CHAR())
+
+    JBasicArrayTypeInfo = gateway.jvm.org.apache.flink.api.common.typeinfo \
+        .BasicArrayTypeInfo
+
+    if _is_instance_of(j_type_info, JBasicArrayTypeInfo.BOOLEAN_ARRAY_TYPE_INFO):
+        return Types.BASIC_ARRAY(Types.BOOLEAN())
+    elif _is_instance_of(j_type_info, JBasicArrayTypeInfo.BYTE_ARRAY_TYPE_INFO):
+        return Types.BASIC_ARRAY(Types.BYTE())
+    elif _is_instance_of(j_type_info, JBasicArrayTypeInfo.SHORT_ARRAY_TYPE_INFO):
+        return Types.BASIC_ARRAY(Types.SHORT())
+    elif _is_instance_of(j_type_info, JBasicArrayTypeInfo.INT_ARRAY_TYPE_INFO):
+        return Types.BASIC_ARRAY(Types.INT())
+    elif _is_instance_of(j_type_info, JBasicArrayTypeInfo.LONG_ARRAY_TYPE_INFO):
+        return Types.BASIC_ARRAY(Types.LONG())
+    elif _is_instance_of(j_type_info, JBasicArrayTypeInfo.FLOAT_ARRAY_TYPE_INFO):
+        return Types.BASIC_ARRAY(Types.FLOAT())
+    elif _is_instance_of(j_type_info, JBasicArrayTypeInfo.DOUBLE_ARRAY_TYPE_INFO):
+        return Types.BASIC_ARRAY(Types.DOUBLE())
+    elif _is_instance_of(j_type_info, JBasicArrayTypeInfo.CHAR_ARRAY_TYPE_INFO):
+        return Types.BASIC_ARRAY(Types.CHAR())
+    elif _is_instance_of(j_type_info, JBasicArrayTypeInfo.STRING_ARRAY_TYPE_INFO):
+        return Types.BASIC_ARRAY(Types.STRING())
 
     JPickledBytesTypeInfo = gateway.jvm \
         .org.apache.flink.streaming.api.typeinfo.python.PickledByteArrayTypeInfo\

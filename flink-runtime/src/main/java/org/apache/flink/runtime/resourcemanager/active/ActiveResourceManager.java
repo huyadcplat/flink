@@ -120,7 +120,8 @@ public class ActiveResourceManager<WorkerType extends ResourceIDRetrievable>
 		try {
 			resourceManagerDriver.initialize(
 					this,
-					new GatewayMainThreadExecutor());
+					new GatewayMainThreadExecutor(),
+					ioExecutor);
 		} catch (Exception e) {
 			throw new ResourceManagerException("Cannot initialize resource provider.", e);
 		}
@@ -133,6 +134,16 @@ public class ActiveResourceManager<WorkerType extends ResourceIDRetrievable>
 		} catch (Exception e) {
 			throw new ResourceManagerException("Cannot terminate resource provider.", e);
 		}
+	}
+
+	@Override
+	protected CompletableFuture<Void> prepareLeadershipAsync() {
+		return resourceManagerDriver.onGrantLeadership();
+	}
+
+	@Override
+	protected CompletableFuture<Void> clearStateAsync() {
+		return resourceManagerDriver.onRevokeLeadership();
 	}
 
 	@Override
@@ -201,8 +212,8 @@ public class ActiveResourceManager<WorkerType extends ResourceIDRetrievable>
 
 	@Override
 	public void onWorkerTerminated(ResourceID resourceId, String diagnostics) {
-		log.info("Worker {} is terminated. Diagnostics: {}", resourceId.getStringWithMetadata(), diagnostics);
 		if (clearStateForWorker(resourceId)) {
+			log.info("Worker {} is terminated. Diagnostics: {}", resourceId.getStringWithMetadata(), diagnostics);
 			requestWorkerIfRequired();
 		}
 		closeTaskManagerConnection(resourceId, new Exception(diagnostics));
@@ -257,7 +268,7 @@ public class ActiveResourceManager<WorkerType extends ResourceIDRetrievable>
 	private boolean clearStateForWorker(ResourceID resourceId) {
 		WorkerType worker = workerNodeMap.remove(resourceId);
 		if (worker == null) {
-			log.info("Ignore unrecognized worker {}.", resourceId.getStringWithMetadata());
+			log.debug("Ignore unrecognized worker {}.", resourceId.getStringWithMetadata());
 			return false;
 		}
 

@@ -19,6 +19,7 @@
 package org.apache.flink.runtime.io.network.netty;
 
 import org.apache.flink.metrics.SimpleCounter;
+import org.apache.flink.runtime.checkpoint.channel.ChannelStateWriter;
 import org.apache.flink.runtime.io.network.ConnectionID;
 import org.apache.flink.runtime.io.network.PartitionRequestClient;
 import org.apache.flink.runtime.io.network.TestingConnectionManager;
@@ -161,7 +162,7 @@ public class CreditBasedPartitionRequestClientHandlerTest {
 			inputGate.setInputChannels(inputChannel);
 			final BufferPool bufferPool = networkBufferPool.createBufferPool(8, 8);
 			inputGate.setBufferPool(bufferPool);
-			inputGate.assignExclusiveSegments();
+			inputGate.setupChannels();
 
 			final CreditBasedPartitionRequestClientHandler handler = new CreditBasedPartitionRequestClientHandler();
 			handler.addInputChannel(inputChannel);
@@ -202,7 +203,7 @@ public class CreditBasedPartitionRequestClientHandlerTest {
 		try {
 			BufferPool bufferPool = networkBufferPool.createBufferPool(8, 8);
 			inputGate.setBufferPool(bufferPool);
-			inputGate.assignExclusiveSegments();
+			inputGate.setupChannels();
 
 			CreditBasedPartitionRequestClientHandler handler = new CreditBasedPartitionRequestClientHandler();
 			handler.addInputChannel(inputChannel);
@@ -322,7 +323,7 @@ public class CreditBasedPartitionRequestClientHandlerTest {
 			inputGate.setInputChannels(inputChannels);
 			final BufferPool bufferPool = networkBufferPool.createBufferPool(6, 6);
 			inputGate.setBufferPool(bufferPool);
-			inputGate.assignExclusiveSegments();
+			inputGate.setupChannels();
 
 			inputChannels[0].requestSubpartition(0);
 			inputChannels[1].requestSubpartition(0);
@@ -431,7 +432,7 @@ public class CreditBasedPartitionRequestClientHandlerTest {
 			inputGate.setInputChannels(inputChannel);
 			final BufferPool bufferPool = networkBufferPool.createBufferPool(6, 6);
 			inputGate.setBufferPool(bufferPool);
-			inputGate.assignExclusiveSegments();
+			inputGate.setupChannels();
 
 			inputChannel.requestSubpartition(0);
 
@@ -500,7 +501,7 @@ public class CreditBasedPartitionRequestClientHandlerTest {
 
 		try {
 			inputGate.setInputChannels(inputChannel);
-			inputGate.assignExclusiveSegments();
+			inputGate.setupChannels();
 			inputGate.requestPartitions();
 			handler.addInputChannel(inputChannel);
 
@@ -540,7 +541,7 @@ public class CreditBasedPartitionRequestClientHandlerTest {
 		RemoteInputChannel inputChannel = new InputChannelBuilder()
 			.buildRemoteChannel(inputGate);
 		inputGate.setInputChannels(inputChannel);
-		inputGate.assignExclusiveSegments();
+		inputGate.setupChannels();
 
 		CreditBasedPartitionRequestClientHandler handler = new CreditBasedPartitionRequestClientHandler();
 		EmbeddedChannel embeddedChannel = new EmbeddedChannel(handler);
@@ -637,7 +638,8 @@ public class CreditBasedPartitionRequestClientHandlerTest {
 				100,
 				2,
 				new SimpleCounter(),
-				new SimpleCounter());
+				new SimpleCounter(),
+				ChannelStateWriter.NO_OP);
 			this.expectedMessage = expectedMessage;
 		}
 

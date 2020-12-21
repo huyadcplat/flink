@@ -19,6 +19,7 @@
 package org.apache.flink.runtime.memory;
 
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.core.memory.HybridMemorySegment;
 import org.apache.flink.core.memory.MemorySegment;
 import org.apache.flink.util.MathUtils;
@@ -471,17 +472,6 @@ public class MemoryManager {
 	// ------------------------------------------------------------------------
 
 	/**
-	 * Acquires a shared memory resource, that uses all the memory of this memory manager.
-	 * This method behaves otherwise exactly as {@link #getSharedMemoryResourceForManagedMemory(String, LongFunctionWithException, double)}.
-	 */
-	public <T extends AutoCloseable> OpaqueMemoryResource<T> getSharedMemoryResourceForManagedMemory(
-			String type,
-			LongFunctionWithException<T, Exception> initializer) throws Exception {
-
-		return getSharedMemoryResourceForManagedMemory(type, initializer, 1.0);
-	}
-
-	/**
 	 * Acquires a shared memory resource, identified by a type string. If the resource already exists, this
 	 * returns a descriptor to the resource. If the resource does not yet exist, the given memory fraction
 	 * is reserved and the resource is initialized with that size.
@@ -590,7 +580,7 @@ public class MemoryManager {
 	}
 
 	/**
-	 * Returns the available amount of the certain type of memory handled by this memory manager.
+	 * Returns the available amount of memory handled by this memory manager.
 	 *
 	 * @return The available amount of memory.
 	 */
@@ -607,9 +597,7 @@ public class MemoryManager {
 	 * @return The number of pages to which
 	 */
 	public int computeNumberOfPages(double fraction) {
-		if (fraction <= 0 || fraction > 1) {
-			throw new IllegalArgumentException("The fraction of memory to allocate must within (0, 1].");
-		}
+		validateFraction(fraction);
 
 		return (int) (totalNumberOfPages * fraction);
 	}
@@ -621,9 +609,7 @@ public class MemoryManager {
 	 * @return The memory size corresponding to the memory fraction
 	 */
 	public long computeMemorySize(double fraction) {
-		Preconditions.checkArgument(
-			fraction > 0 && fraction <= 1,
-			"The fraction of memory to allocate must within (0, 1], was: %s", fraction);
+		validateFraction(fraction);
 
 		return (long) Math.floor(memoryBudget.getTotalMemorySize() * fraction);
 	}
@@ -639,5 +625,17 @@ public class MemoryManager {
 	 */
 	public static MemoryManager create(long memorySize, int pageSize) {
 		return new MemoryManager(memorySize, pageSize, UnsafeMemoryBudget.MAX_SLEEPS_VERIFY_EMPTY);
+	}
+
+	private static void validateFraction(double fraction) {
+		Preconditions.checkArgument(
+			fraction != 0,
+			"The fraction of memory to allocate should not be 0. Please make sure that all types of" +
+				" managed memory consumers contained in the job are configured with a non-negative weight via `%s`.",
+			TaskManagerOptions.MANAGED_MEMORY_CONSUMER_WEIGHTS.key());
+		Preconditions.checkArgument(
+			fraction > 0 && fraction <= 1,
+			"The fraction of memory to allocate must within (0, 1], was: %s.",
+			fraction);
 	}
 }

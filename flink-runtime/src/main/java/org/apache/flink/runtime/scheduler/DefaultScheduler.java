@@ -32,11 +32,11 @@ import org.apache.flink.runtime.concurrent.ScheduledExecutor;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
 import org.apache.flink.runtime.executiongraph.ExecutionVertex;
+import org.apache.flink.runtime.executiongraph.TaskExecutionStateTransition;
 import org.apache.flink.runtime.executiongraph.failover.flip1.ExecutionFailureHandler;
 import org.apache.flink.runtime.executiongraph.failover.flip1.FailoverStrategy;
 import org.apache.flink.runtime.executiongraph.failover.flip1.FailureHandlingResult;
 import org.apache.flink.runtime.executiongraph.failover.flip1.RestartBackoffTimeStrategy;
-import org.apache.flink.runtime.executiongraph.restart.ThrowingRestartStrategy;
 import org.apache.flink.runtime.io.network.partition.JobMasterPartitionTracker;
 import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
 import org.apache.flink.runtime.jobgraph.JobGraph;
@@ -54,7 +54,6 @@ import org.apache.flink.runtime.scheduler.strategy.SchedulingStrategy;
 import org.apache.flink.runtime.scheduler.strategy.SchedulingStrategyFactory;
 import org.apache.flink.runtime.scheduler.strategy.SchedulingTopology;
 import org.apache.flink.runtime.shuffle.ShuffleMaster;
-import org.apache.flink.runtime.taskmanager.TaskExecutionState;
 import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
 import org.apache.flink.util.ExceptionUtils;
 
@@ -67,6 +66,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -141,7 +141,6 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
 			userCodeLoader,
 			checkpointRecoveryFactory,
 			rpcTimeout,
-			new ThrowingRestartStrategy.ThrowingRestartStrategyFactory(),
 			blobWriter,
 			jobManagerJobMetricGroup,
 			Time.seconds(0), // this is not used any more in the new scheduler
@@ -149,7 +148,6 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
 			partitionTracker,
 			executionVertexVersioner,
 			executionDeploymentTracker,
-			false,
 			initializationTimestamp);
 
 		this.log = log;
@@ -181,8 +179,8 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
 	// ------------------------------------------------------------------------
 
 	@Override
-	public void setMainThreadExecutor(ComponentMainThreadExecutor mainThreadExecutor) {
-		super.setMainThreadExecutor(mainThreadExecutor);
+	public void initialize(ComponentMainThreadExecutor mainThreadExecutor) {
+		super.initialize(mainThreadExecutor);
 		startUpAction.accept(mainThreadExecutor);
 	}
 
@@ -194,17 +192,23 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
 	@Override
 	protected void startSchedulingInternal() {
 		log.info("Starting scheduling with scheduling strategy [{}]", schedulingStrategy.getClass().getName());
-		prepareExecutionGraphForNgScheduling();
+		transitionToRunning();
 		schedulingStrategy.startScheduling();
 	}
 
 	@Override
-	protected void updateTaskExecutionStateInternal(final ExecutionVertexID executionVertexId, final TaskExecutionState taskExecutionState) {
+	protected void updateTaskExecutionStateInternal(
+			final ExecutionVertexID executionVertexId,
+			final TaskExecutionStateTransition taskExecutionState) {
+
 		schedulingStrategy.onExecutionStateChange(executionVertexId, taskExecutionState.getExecutionState());
 		maybeHandleTaskFailure(taskExecutionState, executionVertexId);
 	}
 
-	private void maybeHandleTaskFailure(final TaskExecutionState taskExecutionState, final ExecutionVertexID executionVertexId) {
+	private void maybeHandleTaskFailure(
+			final TaskExecutionStateTransition taskExecutionState,
+			final ExecutionVertexID executionVertexId) {
+
 		if (taskExecutionState.getExecutionState() == ExecutionState.FAILED) {
 			final Throwable error = taskExecutionState.getError(userCodeLoader);
 			handleTaskFailure(executionVertexId, error);
@@ -519,13 +523,6 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
 	private class DefaultExecutionSlotAllocationContext implements ExecutionSlotAllocationContext {
 
 		@Override
-		public CompletableFuture<Collection<TaskManagerLocation>> getPreferredLocations(
-				final ExecutionVertexID executionVertexId,
-				final Set<ExecutionVertexID> producersToIgnore) {
-			return getPreferredLocationsRetriever().getPreferredLocations(executionVertexId, producersToIgnore);
-		}
-
-		@Override
 		public ResourceProfile getResourceProfile(final ExecutionVertexID executionVertexId) {
 			return getExecutionVertex(executionVertexId).getResourceProfile();
 		}
@@ -548,6 +545,23 @@ public class DefaultScheduler extends SchedulerBase implements SchedulerOperatio
 		@Override
 		public Set<CoLocationGroupDesc> getCoLocationGroups() {
 			return getJobGraph().getCoLocationGroupDescriptors();
+		}
+
+		@Override
+		public Collection<Collection<ExecutionVertexID>> getConsumedResultPartitionsProducers(
+				ExecutionVertexID executionVertexId) {
+			return inputsLocationsRetriever.getConsumedResultPartitionsProducers(executionVertexId);
+		}
+
+		@Override
+		public Optional<CompletableFuture<TaskManagerLocation>> getTaskManagerLocation(
+				ExecutionVertexID executionVertexId) {
+			return inputsLocationsRetriever.getTaskManagerLocation(executionVertexId);
+		}
+
+		@Override
+		public Optional<TaskManagerLocation> getStateLocation(ExecutionVertexID executionVertexId) {
+			return stateLocationRetriever.getStateLocation(executionVertexId);
 		}
 	}
 }

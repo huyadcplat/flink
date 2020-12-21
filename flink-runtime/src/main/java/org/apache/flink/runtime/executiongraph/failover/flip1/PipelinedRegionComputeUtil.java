@@ -19,7 +19,6 @@
 
 package org.apache.flink.runtime.executiongraph.failover.flip1;
 
-import org.apache.flink.runtime.topology.BaseTopology;
 import org.apache.flink.runtime.topology.Result;
 import org.apache.flink.runtime.topology.Vertex;
 
@@ -45,32 +44,27 @@ public final class PipelinedRegionComputeUtil {
 	private static final Logger LOG = LoggerFactory.getLogger(PipelinedRegionComputeUtil.class);
 
 	public static <V extends Vertex<?, ?, V, R>, R extends Result<?, ?, V, R>> Set<Set<V>> computePipelinedRegions(
-			final BaseTopology<?, ?, V, R> topology) {
-
-		// currently we let a job with co-location constraints fail as one region
-		// putting co-located vertices in the same region with each other can be a future improvement
-		if (topology.containsCoLocationConstraints()) {
-			return Collections.singleton(buildOneRegionForAllVertices(topology));
-		}
-
-		final Map<V, Set<V>> vertexToRegion = buildRawRegions(topology);
-
+			final Iterable<? extends V> topologicallySortedVertexes) {
+		final Map<V, Set<V>> vertexToRegion = buildRawRegions(topologicallySortedVertexes);
 		return mergeRegionsOnCycles(vertexToRegion);
 	}
 
 	private static <V extends Vertex<?, ?, V, R>, R extends Result<?, ?, V, R>> Map<V, Set<V>> buildRawRegions(
-			final BaseTopology<?, ?, V, R> topology) {
+			final Iterable<? extends V> topologicallySortedVertexes) {
 
 		final Map<V, Set<V>> vertexToRegion = new IdentityHashMap<>();
 
 		// iterate all the vertices which are topologically sorted
-		for (V vertex : topology.getVertices()) {
+		for (V vertex : topologicallySortedVertexes) {
 			Set<V> currentRegion = new HashSet<>();
 			currentRegion.add(vertex);
 			vertexToRegion.put(vertex, currentRegion);
 
 			for (R consumedResult : vertex.getConsumedResults()) {
-				if (consumedResult.getResultType().isPipelined()) {
+				// Similar to the BLOCKING ResultPartitionType, each vertex connected through PIPELINED_APPROXIMATE
+				// is also considered as a single region. This attribute is called "reconnectable".
+				// reconnectable will be removed after FLINK-19895, see also {@link ResultPartitionType#isReconnectable}
+				if (!consumedResult.getResultType().isReconnectable()) {
 					final V producerVertex = consumedResult.getProducer();
 					final Set<V> producerRegion = vertexToRegion.get(producerVertex);
 
@@ -112,19 +106,6 @@ public final class PipelinedRegionComputeUtil {
 		}
 		largerSet.addAll(smallerSet);
 		return largerSet;
-	}
-
-	private static <V extends Vertex<?, ?, V, ?>> Set<V> buildOneRegionForAllVertices(
-			final BaseTopology<?, ?, V, ?> topology) {
-
-		LOG.warn("Cannot decompose the topology into individual failover regions due to use of " +
-			"Co-Location constraints (iterations). Job will fail over as one holistic unit.");
-
-		final Set<V> allVertices = Collections.newSetFromMap(new IdentityHashMap<>());
-		for (V vertex : topology.getVertices()) {
-			allVertices.add(vertex);
-		}
-		return allVertices;
 	}
 
 	private static <V extends Vertex<?, ?, V, ?>> Set<Set<V>> uniqueRegions(final Map<V, Set<V>> vertexToRegion) {

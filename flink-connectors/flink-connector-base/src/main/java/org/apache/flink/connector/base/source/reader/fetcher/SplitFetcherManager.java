@@ -18,12 +18,12 @@
 
 package org.apache.flink.connector.base.source.reader.fetcher;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.connector.source.SourceSplit;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.SourceReaderBase;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
-import org.apache.flink.util.ThrowableCatchingRunnable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -112,7 +112,7 @@ public abstract class SplitFetcherManager<E, SplitT extends SourceSplit> {
 	public abstract void addSplits(List<SplitT> splitsToAdd);
 
 	protected void startFetcher(SplitFetcher<E, SplitT> fetcher) {
-		executors.submit(new ThrowableCatchingRunnable(errorHandler, fetcher));
+		executors.submit(fetcher);
 	}
 
 	/**
@@ -133,7 +133,14 @@ public abstract class SplitFetcherManager<E, SplitT extends SourceSplit> {
 			fetcherId,
 			elementsQueue,
 			splitReader,
-			() -> fetchers.remove(fetcherId));
+			errorHandler,
+			() -> {
+				fetchers.remove(fetcherId);
+				// We need this to synchronize status of fetchers to concurrent partners as
+				// ConcurrentHashMap's aggregate status methods including size, isEmpty, and
+				// containsValue are not designed for program control.
+				elementsQueue.notifyAvailable();
+			});
 		fetchers.put(fetcherId, splitFetcher);
 		return splitFetcher;
 	}
@@ -149,6 +156,7 @@ public abstract class SplitFetcherManager<E, SplitT extends SourceSplit> {
 			Map.Entry<Integer, SplitFetcher<E, SplitT>> entry = iter.next();
 			SplitFetcher<E, SplitT> fetcher = entry.getValue();
 			if (fetcher.isIdle()) {
+				LOG.info("Closing splitFetcher {} because it is idle.", entry.getKey());
 				fetcher.shutdown();
 				iter.remove();
 			}
@@ -177,5 +185,12 @@ public abstract class SplitFetcherManager<E, SplitT extends SourceSplit> {
 			throw new RuntimeException("One or more fetchers have encountered exception",
 				uncaughtFetcherException.get());
 		}
+	}
+
+	// -----------------------
+
+	@VisibleForTesting
+	public int getNumAliveFetchers() {
+		return fetchers.size();
 	}
 }

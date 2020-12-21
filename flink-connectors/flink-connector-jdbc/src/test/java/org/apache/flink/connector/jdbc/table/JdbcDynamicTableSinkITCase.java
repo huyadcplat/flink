@@ -20,7 +20,6 @@ package org.apache.flink.connector.jdbc.table;
 
 import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.connector.jdbc.JdbcTestFixture;
-import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.timestamps.AscendingTimestampExtractor;
@@ -147,7 +146,6 @@ public class JdbcDynamicTableSinkITCase extends AbstractTestBase {
 	public void testReal() throws Exception {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 		env.getConfig().enableObjectReuse();
-		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 		EnvironmentSettings envSettings = EnvironmentSettings.newInstance()
 			.useBlinkPlanner()
 			.inStreamingMode()
@@ -171,7 +169,6 @@ public class JdbcDynamicTableSinkITCase extends AbstractTestBase {
 	public void testUpsert() throws Exception {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 		env.getConfig().enableObjectReuse();
-		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 		EnvironmentSettings envSettings = EnvironmentSettings.newInstance()
 			.useBlinkPlanner()
 			.inStreamingMode()
@@ -199,7 +196,8 @@ public class JdbcDynamicTableSinkITCase extends AbstractTestBase {
 				"  'url'='" + DB_URL + "'," +
 				"  'table-name'='" + OUTPUT_TABLE1 + "'," +
 				"  'sink.buffer-flush.max-rows' = '2'," +
-				"  'sink.buffer-flush.interval' = '0'" +
+				"  'sink.buffer-flush.interval' = '0'," +
+				"  'sink.max-retries' = '0'" +
 				")");
 
 		tEnv.executeSql("INSERT INTO upsertSink \n" +

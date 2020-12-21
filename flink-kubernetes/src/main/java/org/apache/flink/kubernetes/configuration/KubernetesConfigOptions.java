@@ -23,7 +23,6 @@ import org.apache.flink.annotation.docs.Documentation;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ExternalResourceOptions;
 import org.apache.flink.configuration.description.Description;
-import org.apache.flink.configuration.description.TextElement;
 import org.apache.flink.runtime.util.EnvironmentInformation;
 
 import java.util.List;
@@ -31,6 +30,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import static org.apache.flink.configuration.ConfigOptions.key;
+import static org.apache.flink.configuration.description.TextElement.code;
 
 /**
  * This class holds configuration constants used by Flink's kubernetes runners.
@@ -139,8 +139,13 @@ public class KubernetesConfigOptions {
 		key("kubernetes.cluster-id")
 		.stringType()
 		.noDefaultValue()
-		.withDescription("The cluster-id, which should be no more than 45 characters, is used for identifying " +
-			"a unique Flink cluster. If not set, the client will automatically generate it with a random ID.");
+		.withDescription(Description.builder()
+			.text("The cluster-id, which should be no more than 45 characters, is used for identifying a unique Flink cluster. "
+				+ "The id must only contain lowercase alphanumeric characters and \"-\". "
+				+ "The required format is %s. "
+				+ "If not set, the client will automatically generate it with a random ID.",
+				code("[a-z]([-a-z0-9]*[a-z0-9])"))
+			.build());
 
 	@Documentation.OverrideDefault("The default value depends on the actually running version. In general it looks like \"flink:<FLINK_VERSION>-scala_<SCALA_VERSION>\"")
 	public static final ConfigOption<String> CONTAINER_IMAGE =
@@ -230,7 +235,7 @@ public class KubernetesConfigOptions {
 			.withDescription(
 				Description.builder()
 					.text("The user-specified secrets that will be mounted into Flink container. The value should be in " +
-						"the form of %s.", TextElement.code("foo:/opt/secrets-foo,bar:/opt/secrets-bar"))
+						"the form of %s.", code("foo:/opt/secrets-foo,bar:/opt/secrets-bar"))
 					.build());
 
 	public static final ConfigOption<List<Map<String, String>>> KUBERNETES_ENV_SECRET_KEY_REF =
@@ -241,7 +246,7 @@ public class KubernetesConfigOptions {
 			.withDescription(
 				Description.builder()
 					.text("The user-specified secrets to set env variables in Flink container. The value should be in " +
-						"the form of %s.", TextElement.code("env:FOO_ENV,secret:foo_secret,key:foo_key;env:BAR_ENV,secret:bar_secret,key:bar_key"))
+						"the form of %s.", code("env:FOO_ENV,secret:foo_secret,key:foo_key;env:BAR_ENV,secret:bar_secret,key:bar_key"))
 					.build());
 
 	/**
@@ -257,6 +262,16 @@ public class KubernetesConfigOptions {
 			.noDefaultValue()
 			.withDescription("If configured, Flink will add \"resources.limits.<config-key>\" and \"resources.requests.<config-key>\" " +
 				"to the main container of TaskExecutor and set the value to the value of " + ExternalResourceOptions.EXTERNAL_RESOURCE_AMOUNT.key() + ".");
+
+	public static final ConfigOption<Integer> KUBERNETES_TRANSACTIONAL_OPERATION_MAX_RETRIES =
+		key("kubernetes.transactional-operation.max-retries")
+			.intType()
+			.defaultValue(5)
+			.withDescription(
+				Description.builder()
+					.text("Defines the number of Kubernetes transactional operation retries before the " +
+					"client gives up. For example, %s.", code("FlinkKubeClient#checkAndUpdateConfigMap"))
+					.build());
 
 	private static String getDefaultFlinkImage() {
 		// The default container image that ties to the exact needed versions of both Flink and Scala.

@@ -21,7 +21,6 @@ package org.apache.flink.table.runtime.stream.table
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.java.typeutils.{GenericTypeInfo, RowTypeInfo}
 import org.apache.flink.api.scala._
-import org.apache.flink.streaming.api.TimeCharacteristic
 import org.apache.flink.streaming.api.datastream.DataStream
 import org.apache.flink.streaming.api.environment.{StreamExecutionEnvironment => JExecEnv}
 import org.apache.flink.streaming.api.functions.ProcessFunction
@@ -196,7 +195,6 @@ class TableSourceITCase extends AbstractTestBase {
   def testRowtimeRowTableSource(): Unit = {
     val tableName = "MyTable"
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -233,7 +231,6 @@ class TableSourceITCase extends AbstractTestBase {
   def testProctimeRowTableSource(): Unit = {
     val tableName = "MyTable"
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -272,7 +269,6 @@ class TableSourceITCase extends AbstractTestBase {
   def testRowtimeProctimeRowTableSource(): Unit = {
     val tableName = "MyTable"
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -311,7 +307,6 @@ class TableSourceITCase extends AbstractTestBase {
   def testRowtimeAsTimestampRowTableSource(): Unit = {
     val tableName = "MyTable"
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -348,7 +343,6 @@ class TableSourceITCase extends AbstractTestBase {
   def testRowtimeLongTableSource(): Unit = {
     val tableName = "MyTable"
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -378,7 +372,6 @@ class TableSourceITCase extends AbstractTestBase {
   def testRowtimeStringTableSource(): Unit = {
     val tableName = "MyTable"
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -414,7 +407,6 @@ class TableSourceITCase extends AbstractTestBase {
   def testProctimeStringTableSource(): Unit = {
     val tableName = "MyTable"
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -440,7 +432,6 @@ class TableSourceITCase extends AbstractTestBase {
   def testRowtimeProctimeLongTableSource(): Unit = {
     val tableName = "MyTable"
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -473,7 +464,6 @@ class TableSourceITCase extends AbstractTestBase {
   def testFieldMappingTableSource(): Unit = {
     val tableName = "MyTable"
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -509,7 +499,6 @@ class TableSourceITCase extends AbstractTestBase {
   @Test
   def testProjectWithoutRowtimeProctime(): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -547,7 +536,6 @@ class TableSourceITCase extends AbstractTestBase {
   @Test
   def testProjectWithoutProctime(): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -585,7 +573,6 @@ class TableSourceITCase extends AbstractTestBase {
   @Test
   def testProjectWithoutRowtime(): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -623,7 +610,6 @@ class TableSourceITCase extends AbstractTestBase {
 
   def testProjectOnlyProctime(): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -657,7 +643,6 @@ class TableSourceITCase extends AbstractTestBase {
 
   def testProjectOnlyRowtime(): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -695,7 +680,6 @@ class TableSourceITCase extends AbstractTestBase {
   @Test
   def testProjectWithMapping(): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -734,7 +718,6 @@ class TableSourceITCase extends AbstractTestBase {
   @Test
   def testNestedProject(): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 
@@ -806,7 +789,6 @@ class TableSourceITCase extends AbstractTestBase {
   def testRowtimeTableSourcePreserveWatermarks(): Unit = {
     val tableName = "MyTable"
     val env = StreamExecutionEnvironment.getExecutionEnvironment
-    env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     val settings = EnvironmentSettings.newInstance().useOldPlanner().build()
     val tEnv = StreamTableEnvironment.create(env, settings)
 

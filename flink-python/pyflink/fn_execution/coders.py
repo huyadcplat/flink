@@ -32,14 +32,21 @@ except:
 __all__ = ['RowCoder', 'BigIntCoder', 'TinyIntCoder', 'BooleanCoder',
            'SmallIntCoder', 'IntCoder', 'FloatCoder', 'DoubleCoder',
            'BinaryCoder', 'CharCoder', 'DateCoder', 'TimeCoder',
-           'TimestampCoder', 'ArrayCoder', 'MapCoder', 'DecimalCoder']
+           'TimestampCoder', 'BasicArrayCoder', 'PrimitiveArrayCoder', 'MapCoder', 'DecimalCoder']
 
+# table coders
 FLINK_SCALAR_FUNCTION_SCHEMA_CODER_URN = "flink:coder:schema:scalar_function:v1"
 FLINK_TABLE_FUNCTION_SCHEMA_CODER_URN = "flink:coder:schema:table_function:v1"
+FLINK_AGGREGATE_FUNCTION_SCHEMA_CODER_URN = "flink:coder:schema:aggregate_function:v1"
 FLINK_SCALAR_FUNCTION_SCHEMA_ARROW_CODER_URN = "flink:coder:schema:scalar_function:arrow:v1"
 FLINK_SCHEMA_ARROW_CODER_URN = "flink:coder:schema:arrow:v1"
-FLINK_MAP_FUNCTION_DATA_STREAM_CODER_URN = "flink:coder:datastream:map_function:v1"
-FLINK_FLAT_MAP_FUNCTION_DATA_STREAM_CODER_URN = "flink:coder:datastream:flatmap_function:v1"
+FLINK_OVER_WINDOW_ARROW_CODER_URN = "flink:coder:schema:batch_over_window:arrow:v1"
+
+
+# datastream coders
+FLINK_MAP_CODER_URN = "flink:coder:map:v1"
+FLINK_FLAT_MAP_CODER_URN = "flink:coder:flat_map:v1"
+FLINK_CO_FLAT_MAP_CODER_URN = "flink:coder:co_flat_map:v1"
 
 
 class BaseCoder(ABC):
@@ -68,6 +75,35 @@ class TableFunctionRowCoder(BaseCoder):
 
     def __repr__(self):
         return 'TableFunctionRowCoder[%s]' % repr(self._flatten_row_coder)
+
+    def __eq__(self, other):
+        return (self.__class__ == other.__class__
+                and self._flatten_row_coder == other._flatten_row_coder)
+
+    def __ne__(self, other):
+        return not self == other
+
+    def __hash__(self):
+        return hash(self._flatten_row_coder)
+
+
+class AggregateFunctionRowCoder(BaseCoder):
+    """
+    Coder for Aggregate Function Input Row.
+    """
+
+    def __init__(self, flatten_row_coder):
+        self._flatten_row_coder = flatten_row_coder
+
+    def get_impl(self):
+        return coder_impl.AggregateFunctionRowCoderImpl(self._flatten_row_coder.get_impl())
+
+    @staticmethod
+    def from_schema_proto(schema_proto):
+        return AggregateFunctionRowCoder(FlattenRowCoder.from_schema_proto(schema_proto))
+
+    def __repr__(self):
+        return 'AggregateFunctionRowCoder[%s]' % repr(self._flatten_row_coder)
 
     def __eq__(self, other):
         return (self.__class__ == other.__class__
@@ -112,7 +148,7 @@ class FlattenRowCoder(BaseCoder):
         return hash(self._field_coders)
 
 
-class DataStreamStatelessMapCoder(BaseCoder):
+class DataStreamMapCoder(BaseCoder):
     """
     Coder for a DataStream Map Function input/output data.
     """
@@ -121,14 +157,14 @@ class DataStreamStatelessMapCoder(BaseCoder):
         self._field_coders = field_coders
 
     def get_impl(self):
-        return coder_impl.DataStreamStatelessMapCoderImpl(self._field_coders.get_impl())
+        return coder_impl.DataStreamMapCoderImpl(self._field_coders.get_impl())
 
     @staticmethod
     def from_type_info_proto(type_info_proto):
-        return DataStreamStatelessMapCoder(from_type_info_proto(type_info_proto.field[0].type))
+        return DataStreamMapCoder(from_type_info_proto(type_info_proto.field[0].type))
 
     def __repr__(self):
-        return 'DataStreamStatelessMapCoder[%s]' % ', '.join(str(c) for c in self._field_coders)
+        return 'DataStreamMapCoder[%s]' % ', '.join(str(c) for c in self._field_coders)
 
     def __eq__(self, other):
         return (self.__class__ == other.__class__
@@ -143,7 +179,7 @@ class DataStreamStatelessMapCoder(BaseCoder):
         return hash(self._field_coders)
 
 
-class DataStreamStatelessFlatMapCoder(BaseCoder):
+class DataStreamFlatMapCoder(BaseCoder):
     """
     Coder for a DataStream FlatMap Function input/output data.
     """
@@ -152,15 +188,47 @@ class DataStreamStatelessFlatMapCoder(BaseCoder):
         self._field_coders = field_codes
 
     def get_impl(self):
-        return coder_impl.DataStreamStatelessFlatMapCoderImpl(
-            DataStreamStatelessMapCoder(self._field_coders).get_impl())
+        return coder_impl.DataStreamFlatMapCoderImpl(
+            DataStreamMapCoder(self._field_coders).get_impl())
 
     @staticmethod
     def from_type_info_proto(type_info_proto):
-        return DataStreamStatelessFlatMapCoder(from_type_info_proto(type_info_proto.field[0].type))
+        return DataStreamFlatMapCoder(from_type_info_proto(type_info_proto.field[0].type))
 
     def __repr__(self):
-        return 'DataStreamStatelessFlatMapCoder[%s]' % ', '.join(str(c) for c in self._field_coders)
+        return 'DataStreamFlatMapCoder[%s]' % ', '.join(str(c) for c in self._field_coders)
+
+    def __eq__(self, other):
+        return (self.__class__ == other.__class__
+                and len(self._field_coders) == len(other._field_coders)
+                and [self._field_coders[i] == other._field_coders[i] for i in
+                     range(len(self._field_coders))])
+
+    def __ne__(self, other):
+        return not self == other
+
+    def __hash__(self):
+        return hash(self._field_coders)
+
+
+class DataStreamCoFlatMapCoder(BaseCoder):
+    """
+    Coder for a DataStream CoFlatMap Function input/output data.
+    """
+
+    def __init__(self, field_codes):
+        self._field_coders = field_codes
+
+    def get_impl(self):
+        return coder_impl.DataStreamCoFlatMapCoderImpl(
+            DataStreamMapCoder(self._field_coders).get_impl())
+
+    @staticmethod
+    def from_type_info_proto(type_info_proto):
+        return DataStreamCoFlatMapCoder(from_type_info_proto(type_info_proto.field[0].type))
+
+    def __repr__(self):
+        return 'DataStreamCoFlatMapCoder[%s]' % ', '.join(str(c) for c in self._field_coders)
 
     def __eq__(self, other):
         return (self.__class__ == other.__class__
@@ -181,19 +249,33 @@ class FieldCoder(ABC):
         pass
 
 
-class RowCoder(FieldCoder):
+class RowCoder(FieldCoder, BaseCoder):
     """
     Coder for Row.
     """
 
-    def __init__(self, field_coders):
+    def __init__(self, field_coders, field_names):
         self._field_coders = field_coders
+        self._field_names = field_names
 
     def get_impl(self):
-        return coder_impl.RowCoderImpl([c.get_impl() for c in self._field_coders])
+        return coder_impl.RowCoderImpl([c.get_impl() for c in self._field_coders],
+                                       self._field_names)
 
     def __repr__(self):
         return 'RowCoder[%s]' % ', '.join(str(c) for c in self._field_coders)
+
+    def __eq__(self, other):
+        return (self.__class__ == other.__class__
+                and self._field_names == other._field_names
+                and [self._field_coders[i] == other._field_coders[i] for i in
+                     range(len(self._field_coders))])
+
+    def __ne__(self, other):
+        return not self == other
+
+    def __hash__(self):
+        return hash(self._field_coders)
 
 
 class CollectionCoder(FieldCoder):
@@ -221,17 +303,28 @@ class CollectionCoder(FieldCoder):
         return hash(self._elem_coder)
 
 
-class ArrayCoder(CollectionCoder):
+class BasicArrayCoder(CollectionCoder):
     """
     Coder for Array.
     """
 
     def __init__(self, elem_coder):
-        self._elem_coder = elem_coder
-        super(ArrayCoder, self).__init__(elem_coder)
+        super(BasicArrayCoder, self).__init__(elem_coder)
 
     def get_impl(self):
-        return coder_impl.ArrayCoderImpl(self._elem_coder.get_impl())
+        return coder_impl.BasicArrayCoderImpl(self._elem_coder.get_impl())
+
+
+class PrimitiveArrayCoder(CollectionCoder):
+    """
+    Coder for Primitive Array.
+    """
+
+    def __init__(self, elem_coder):
+        super(PrimitiveArrayCoder, self).__init__(elem_coder)
+
+    def get_impl(self):
+        return coder_impl.PrimitiveArrayCoderImpl(self._elem_coder.get_impl())
 
 
 class MapCoder(FieldCoder):
@@ -461,14 +554,15 @@ def from_proto(field_type):
     if coder is not None:
         return coder
     if field_type_name == type_name.ROW:
-        return RowCoder([from_proto(f.type) for f in field_type.row_schema.fields])
+        return RowCoder([from_proto(f.type) for f in field_type.row_schema.fields],
+                        [f.name for f in field_type.row_schema.fields])
     if field_type_name == type_name.TIMESTAMP:
         return TimestampCoder(field_type.timestamp_info.precision)
     if field_type_name == type_name.LOCAL_ZONED_TIMESTAMP:
         timezone = pytz.timezone(os.environ['table.exec.timezone'])
         return LocalZonedTimestampCoder(field_type.local_zoned_timestamp_info.precision, timezone)
-    elif field_type_name == type_name.ARRAY:
-        return ArrayCoder(from_proto(field_type.collection_element_type))
+    elif field_type_name == type_name.BASIC_ARRAY:
+        return BasicArrayCoder(from_proto(field_type.collection_element_type))
     elif field_type_name == type_name.MAP:
         return MapCoder(from_proto(field_type.map_info.key_type),
                         from_proto(field_type.map_info.value_type))
@@ -506,10 +600,14 @@ def from_type_info_proto(field_type):
         return _type_info_name_mappings[field_type_name]
     except KeyError:
         if field_type_name == type_info_name.ROW:
-            return RowCoder([from_type_info_proto(f.type) for f in field_type.row_type_info.field])
+            return RowCoder([from_type_info_proto(f.type) for f in field_type.row_type_info.field],
+                            [f.name for f in field_type.row_type_info.field])
 
-        if field_type_name == type_info_name.ARRAY:
-            return ArrayCoder([from_type_info_proto(field_type.collection_element_type)])
+        if field_type_name == type_info_name.PRIMITIVE_ARRAY:
+            return PrimitiveArrayCoder(from_type_info_proto(field_type.collection_element_type))
+
+        if field_type_name == type_info_name.BASIC_ARRAY:
+            return BasicArrayCoder(from_type_info_proto(field_type.collection_element_type))
 
         if field_type_name == type_info_name.TUPLE:
             return TupleCoder([from_type_info_proto(f.type)

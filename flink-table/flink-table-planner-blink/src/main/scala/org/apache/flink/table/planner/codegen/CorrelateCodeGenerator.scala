@@ -22,13 +22,14 @@ import org.apache.flink.api.common.functions.Function
 import org.apache.flink.api.dag.Transformation
 import org.apache.flink.streaming.api.functions.ProcessFunction
 import org.apache.flink.table.api.{TableConfig, TableException, ValidationException}
-import org.apache.flink.table.data.{GenericRowData, JoinedRowData, RowData}
+import org.apache.flink.table.data.utils.JoinedRowData
+import org.apache.flink.table.data.{GenericRowData, RowData}
 import org.apache.flink.table.functions.FunctionKind
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory
 import org.apache.flink.table.planner.codegen.CodeGenUtils._
 import org.apache.flink.table.planner.functions.bridging.BridgingSqlFunction
 import org.apache.flink.table.planner.functions.utils.TableSqlFunction
-import org.apache.flink.table.planner.plan.nodes.exec.ExecNode
+import org.apache.flink.table.planner.plan.nodes.exec.utils.ExecNodeUtil
 import org.apache.flink.table.planner.plan.nodes.logical.FlinkLogicalTableFunctionScan
 import org.apache.flink.table.runtime.operators.CodeGenOperatorFactory
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo
@@ -110,12 +111,13 @@ object CorrelateCodeGenerator {
       classOf[ProcessFunction[RowData, RowData]],
       retainHeader)
 
-    ExecNode.createOneInputTransformation(
+    ExecNodeUtil.createOneInputTransformation(
       inputTransformation,
       transformationName,
       substituteStreamOperator,
       InternalTypeInfo.of(returnType),
-      parallelism)
+      parallelism,
+      0)
   }
 
   /**

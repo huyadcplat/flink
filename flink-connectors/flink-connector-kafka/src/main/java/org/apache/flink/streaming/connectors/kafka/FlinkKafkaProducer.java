@@ -22,6 +22,7 @@ import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.api.common.serialization.RuntimeContextInitializationContextAdapters;
 import org.apache.flink.api.common.serialization.SerializationSchema;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
@@ -39,10 +40,10 @@ import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.functions.sink.TwoPhaseCommitSinkFunction;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
-import org.apache.flink.streaming.connectors.kafka.internal.FlinkKafkaInternalProducer;
-import org.apache.flink.streaming.connectors.kafka.internal.TransactionalIdsGenerator;
-import org.apache.flink.streaming.connectors.kafka.internal.metrics.KafkaMetricMutableWrapper;
+import org.apache.flink.streaming.connectors.kafka.internals.FlinkKafkaInternalProducer;
 import org.apache.flink.streaming.connectors.kafka.internals.KafkaSerializationSchemaWrapper;
+import org.apache.flink.streaming.connectors.kafka.internals.TransactionalIdsGenerator;
+import org.apache.flink.streaming.connectors.kafka.internals.metrics.KafkaMetricMutableWrapper;
 import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkFixedPartitioner;
 import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkKafkaPartitioner;
 import org.apache.flink.streaming.util.serialization.KeyedSerializationSchema;
@@ -143,6 +144,12 @@ public class FlinkKafkaProducer<IN>
 	private static final Logger LOG = LoggerFactory.getLogger(FlinkKafkaProducer.class);
 
 	private static final long serialVersionUID = 1L;
+
+	/**
+	 * Number of characters to truncate the taskName to for the Kafka transactionalId.
+	 * The maximum this can possibly be set to is 32,767 - (length of operatorUniqueId).
+	 */
+	private static final short maxTaskNameSize = 1_000;
 
 	/**
 	 * This coefficient determines what is the safe scale down factor.
@@ -805,7 +812,10 @@ public class FlinkKafkaProducer<IN>
 		}
 
 		if (kafkaSchema != null) {
-			kafkaSchema.open(() -> ctx.getMetricGroup().addGroup("user"));
+			kafkaSchema.open(RuntimeContextInitializationContextAdapters.serializationAdapter(
+					getRuntimeContext(),
+					metricGroup -> metricGroup.addGroup("user")
+			));
 		}
 
 		super.open(configuration);
@@ -1080,8 +1090,15 @@ public class FlinkKafkaProducer<IN>
 			migrateNextTransactionalIdHindState(context);
 		}
 
+		String taskName = getRuntimeContext().getTaskName();
+		// Kafka transactional IDs are limited in length to be less than the max value of a short,
+		// so we truncate here if necessary to a more reasonable length string.
+		if (taskName.length() > maxTaskNameSize) {
+			taskName = taskName.substring(0, maxTaskNameSize);
+			LOG.warn("Truncated task name for Kafka TransactionalId from {} to {}.", getRuntimeContext().getTaskName(), taskName);
+		}
 		transactionalIdsGenerator = new TransactionalIdsGenerator(
-			getRuntimeContext().getTaskName() + "-" + ((StreamingRuntimeContext) getRuntimeContext()).getOperatorUniqueID(),
+			taskName + "-" + ((StreamingRuntimeContext) getRuntimeContext()).getOperatorUniqueID(),
 			getRuntimeContext().getIndexOfThisSubtask(),
 			getRuntimeContext().getNumberOfParallelSubtasks(),
 			kafkaProducersPoolSize,

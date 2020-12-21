@@ -22,15 +22,16 @@ import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.data.GenericRowData;
-import org.apache.flink.table.data.JoinedRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.data.binary.BinaryRowData;
+import org.apache.flink.table.data.utils.JoinedRowData;
 import org.apache.flink.table.functions.AggregateFunction;
 import org.apache.flink.table.functions.python.PythonFunctionInfo;
 import org.apache.flink.table.runtime.operators.window.TimeWindow;
 import org.apache.flink.table.runtime.operators.window.grouping.HeapWindowsGrouping;
 import org.apache.flink.table.runtime.operators.window.grouping.WindowsGrouping;
+import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.table.runtime.util.RowIterator;
 import org.apache.flink.table.types.logical.RowType;
 
@@ -92,6 +93,11 @@ public class BatchArrowPythonGroupWindowAggregateFunctionOperator
 	 */
 	private transient LinkedList<Tuple2<RowData, TimeWindow>> inputKeyAndWindow;
 
+	/**
+	 * The type serializer for the forwarded fields.
+	 */
+	private transient RowDataSerializer forwardedInputSerializer;
+
 	public BatchArrowPythonGroupWindowAggregateFunctionOperator(
 		Configuration config,
 		PythonFunctionInfo[] pandasAggFunctions,
@@ -122,6 +128,7 @@ public class BatchArrowPythonGroupWindowAggregateFunctionOperator
 		windowAggResult = new JoinedRowData();
 		windowsGrouping = new HeapWindowsGrouping(
 			maxLimitSize, windowSize, slideSize, inputTimeFieldIndex, false);
+		forwardedInputSerializer = new RowDataSerializer(inputType);
 		super.open();
 	}
 
@@ -152,7 +159,7 @@ public class BatchArrowPythonGroupWindowAggregateFunctionOperator
 
 	@Override
 	public void processElementInternal(RowData value) throws Exception {
-		windowsGrouping.addInputToBuffer((BinaryRowData) value);
+		windowsGrouping.addInputToBuffer(forwardedInputSerializer.toBinaryRow(value).copy());
 		triggerWindowProcess();
 	}
 
