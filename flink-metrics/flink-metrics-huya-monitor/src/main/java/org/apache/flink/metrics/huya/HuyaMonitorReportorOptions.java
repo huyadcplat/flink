@@ -27,8 +27,6 @@ public class HuyaMonitorReportorOptions {
 		.defaultValue("https://stream-dc.huya.com/svr/metrics/getAllMetrics.do")
 		.withDescription("The HuyaMonitoir report server url.");
 
-
-
 	public static final ConfigOption<String> JOB_ID = ConfigOptions
 		.key("job-id")
 		.noDefaultValue()

@@ -37,8 +37,8 @@ public class HttpRequestEntity {
 		for (DMetric dMetric : metrics) {
 			ReportRequest reportObj = new ReportRequest()
 				.setNamespace(namespace)
-				.setMetric(jobId)
-				.setEndpoint(dMetric.getMetric())
+				.setMetric(dMetric.getMetric())
+				.setEndpoint(jobId)
 				.setStep(step)
 				.setTimestamp(DMetric.getUnixEpochTimestamp())
 				.setTags(dMetric.getStringTags())
