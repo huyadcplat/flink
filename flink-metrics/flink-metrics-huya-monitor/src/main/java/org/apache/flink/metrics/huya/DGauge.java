@@ -19,7 +19,6 @@
 package org.apache.flink.metrics.huya;
 
 import org.apache.flink.metrics.Gauge;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,6 +54,10 @@ public class DGauge extends DMetric {
 		}
 		if (value instanceof Boolean) {
 			return ((Boolean) value) ? 1.0 : 0;
+		}
+		if (value instanceof String) {
+			getTags().put("strValue", (String) value);
+			return 1.0;
 		}
 		LOG.warn("Invalid type for Gauge {}: {}, only number types and booleans are supported by this reporter.",
 			gauge, value.getClass().getName());
