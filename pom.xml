@@ -2100,4 +2100,18 @@ under the License.
 		</pluginManagement>
 	</build>
 
+	<distributionManagement>
+		<repository>
+			<id>huya-releases</id>
+			<name>Internal Releases</name>
+			<url>https://nexus.huya.com/repository/releases/</url>
+		</repository>
+		<snapshotRepository>
+			<id>huya-snapshots</id>
+			<name>Internal snapshots</name>
+			<url>https://nexus.huya.com/repository/snapshots/</url>
+		</snapshotRepository>
+	</distributionManagement>
+
+
 </project>

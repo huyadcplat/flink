@@ -1,8 +1,29 @@
 package org.apache.flink.metrics.huya;
 
-/**
- * @Author jinyaqia
- * @Date 2/26/21 3:12 PM
- */
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+
+/** @Author jinyaqia @Date 12/11/20 3:13 PM */
 public class Md5Utils {
+    public static String crypt(String str) {
+        if (str == null || str.length() == 0) {
+            throw new IllegalArgumentException("String to encript cannot be null or zero length");
+        }
+        StringBuffer hexString = new StringBuffer();
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            md.update(str.getBytes());
+            byte[] hash = md.digest();
+            for (int i = 0; i < hash.length; i++) {
+                if ((0xff & hash[i]) < 0x10) {
+                    hexString.append("0" + Integer.toHexString((0xFF & hash[i])));
+                } else {
+                    hexString.append(Integer.toHexString(0xFF & hash[i]));
+                }
+            }
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        }
+        return hexString.toString();
+    }
 }

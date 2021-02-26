@@ -26,13 +26,13 @@ under the License.
 	<parent>
 		<groupId>org.apache.flink</groupId>
 		<artifactId>flink-metrics</artifactId>
-		<version>1.9.3</version>
+		<version>1.12.1</version>
 
 		<relativePath>..</relativePath>
 	</parent>
 
 	<properties>
-		<version>1.9.3.5</version>
+		<version>1.12.1.0</version>
 		<okhttp.version>3.7.0</okhttp.version>
 
 	</properties>
