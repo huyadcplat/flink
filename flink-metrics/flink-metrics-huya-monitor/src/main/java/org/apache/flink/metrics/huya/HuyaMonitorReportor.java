@@ -1,6 +1,12 @@
 package org.apache.flink.metrics.huya;
 
-import org.apache.flink.metrics.*;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Gauge;
+import org.apache.flink.metrics.Histogram;
+import org.apache.flink.metrics.Meter;
+import org.apache.flink.metrics.Metric;
+import org.apache.flink.metrics.MetricConfig;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.metrics.reporter.AbstractReporter;
 import org.apache.flink.metrics.reporter.Scheduled;
 import org.apache.flink.runtime.metrics.groups.AbstractMetricGroup;
@@ -10,12 +16,21 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.SocketTimeoutException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
-import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.*;
+import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.JOB_ID;
+import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.METRIC_URL;
+import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.NAMESPACE;
+import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.STEP;
+import static org.apache.flink.metrics.huya.HuyaMonitorReportorOptions.URL;
 
 /** report flink metric to huya monitor system. */
 public class HuyaMonitorReportor extends AbstractReporter implements Scheduled {

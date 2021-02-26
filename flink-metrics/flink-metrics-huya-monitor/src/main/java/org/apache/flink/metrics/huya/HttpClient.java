@@ -3,7 +3,12 @@ package org.apache.flink.metrics.huya;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.extern.slf4j.Slf4j;
-import okhttp3.*;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,7 +20,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-/** send metric to http api */
+/** send metric to http api. */
 @Slf4j
 public class HttpClient {
 
@@ -28,7 +33,6 @@ public class HttpClient {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public HttpClient(String address) {
-
         this.address = address;
         client =
                 new OkHttpClient()
@@ -66,7 +70,7 @@ public class HttpClient {
     }
 
     /**
-     * 通过接口获取需要上报的metric列表
+     * 通过接口获取需要上报的metric列表.
      *
      * @param metricUrl
      * @return
@@ -84,7 +88,7 @@ public class HttpClient {
                     Arrays.asList(JsonUtils.getNestedObject(json, "data", String[].class));
             metricsSet =
                     metricList.stream()
-                            .map(el -> HuyaMonitorReportor.filter(el))
+                            .map(HuyaMonitorReportor::filter)
                             .collect(Collectors.toSet());
         } catch (IOException e) {
             e.printStackTrace();

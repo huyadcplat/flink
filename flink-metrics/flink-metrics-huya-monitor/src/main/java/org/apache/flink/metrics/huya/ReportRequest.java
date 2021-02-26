@@ -10,9 +10,9 @@ import java.io.Serializable;
 @Accessors(chain = true)
 public class ReportRequest implements Serializable {
     private String namespace;
-    /** metric为jobId */
+    /** metric为jobId. */
     private String metric;
-    /** endpoint为指标名 */
+    /** endpoint为指标名. */
     private String endpoint;
 
     private int step;

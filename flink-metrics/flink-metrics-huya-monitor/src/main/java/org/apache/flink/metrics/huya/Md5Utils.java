@@ -3,7 +3,7 @@ package org.apache.flink.metrics.huya;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
-/** @Author jinyaqia @Date 12/11/20 3:13 PM */
+/** util. */
 public class Md5Utils {
     public static String crypt(String str) {
         if (str == null || str.length() == 0) {

@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/** 指标抽象类. */
 @Data
 public abstract class DMetric {
     private static final long MILLIS_TO_SEC = 1000L;

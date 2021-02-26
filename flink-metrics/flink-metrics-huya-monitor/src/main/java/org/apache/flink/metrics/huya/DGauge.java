@@ -19,48 +19,49 @@
 package org.apache.flink.metrics.huya;
 
 import org.apache.flink.metrics.Gauge;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 
-/**
- * Mapping of gauge between Flink and neo.
- */
+/** Mapping of gauge between Flink and neo. */
 public class DGauge extends DMetric {
 
-	private static final Logger LOG = LoggerFactory.getLogger(DGauge.class);
+    private static final Logger LOG = LoggerFactory.getLogger(DGauge.class);
 
-	private final Gauge<?> gauge;
+    private final Gauge<?> gauge;
 
-	public DGauge(Gauge g, String metricName, Map<String, String> tags) {
-		super(MetricType.gauge, metricName, tags);
-		gauge = g;
-	}
+    public DGauge(Gauge g, String metricName, Map<String, String> tags) {
+        super(MetricType.gauge, metricName, tags);
+        gauge = g;
+    }
 
-	/**
-	 * Visibility of this method must not be changed
-	 * since we deliberately not map it to json object in a Datadog-defined format.
-	 */
-	@Override
-	public Double getMetricValue() {
-		final Object value = gauge.getValue();
-		if (value == null) {
-			LOG.warn("Gauge {} is null-valued, defaulting to 0.", gauge);
-			return null;
-		}
-		if (value instanceof Number) {
-			return ((Number) value).doubleValue();
-		}
-		if (value instanceof Boolean) {
-			return ((Boolean) value) ? 1.0 : 0;
-		}
-		if (value instanceof String) {
-			getTags().put("strValue", (String) value);
-			return 1.0;
-		}
-		LOG.warn("Invalid type for Gauge {}: {}, only number types and booleans are supported by this reporter.",
-			gauge, value.getClass().getName());
-		return null;
-	}
+    /**
+     * Visibility of this method must not be changed since we deliberately not map it to json object
+     * in a Datadog-defined format.
+     */
+    @Override
+    public Double getMetricValue() {
+        final Object value = gauge.getValue();
+        if (value == null) {
+            LOG.warn("Gauge {} is null-valued, defaulting to 0.", gauge);
+            return null;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).doubleValue();
+        }
+        if (value instanceof Boolean) {
+            return ((Boolean) value) ? 1.0 : 0;
+        }
+        if (value instanceof String) {
+            getTags().put("strValue", (String) value);
+            return 1.0;
+        }
+        LOG.warn(
+                "Invalid type for Gauge {}: {}, only number types and booleans are supported by this reporter.",
+                gauge,
+                value.getClass().getName());
+        return null;
+    }
 }
