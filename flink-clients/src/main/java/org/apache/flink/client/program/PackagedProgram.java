@@ -250,6 +250,10 @@ public class PackagedProgram {
             libs.add(PackagedProgramUtils.getPythonJar());
         }
 
+        if (classpaths != null) {
+            libs.addAll(classpaths);
+        }
+
         return libs;
     }
 
