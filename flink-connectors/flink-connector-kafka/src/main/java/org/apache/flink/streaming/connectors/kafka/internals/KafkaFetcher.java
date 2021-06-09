@@ -17,15 +17,21 @@
 
 package org.apache.flink.streaming.connectors.kafka.internals;
 
+
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.calcite.shaded.com.google.common.base.Joiner;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.connectors.kafka.KafkaDeserializationSchema;
+import org.apache.flink.streaming.runtime.connector.metrics.ConsumeDelayGauge;
+import org.apache.flink.streaming.runtime.connector.metrics.RecordTimestampGauge;
 import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.SerializedValue;
 
+import org.apache.kafka.clients.GroupRebalanceConfig;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -36,13 +42,17 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nonnull;
 
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Queue;
+import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.flink.util.Preconditions.checkState;
+import static org.apache.flink.streaming.connectors.kafka.internals.metrics.KafkaConsumerMetricConstants.*;
 
 /**
  * A fetcher that fetches data from Kafka brokers via the Kafka consumer API.
@@ -73,7 +83,15 @@ public class KafkaFetcher<T> extends AbstractFetcher<T, TopicPartition> {
     /** Flag to mark the main work loop as alive. */
     volatile boolean running = true;
 
+    /** user-defined metric. */
+    private final MetricGroup consumerMetricGroup;
+    private final ConcurrentHashMap<String, Long> produceTimestampMap;
+    private final ConcurrentHashMap<String, Boolean> statusMap;
+
+    private final String groupId;
+
     // ------------------------------------------------------------------------
+
 
     public KafkaFetcher(
             SourceFunction.SourceContext<T> sourceContext,
@@ -115,6 +133,14 @@ public class KafkaFetcher<T> extends AbstractFetcher<T, TopicPartition> {
                         consumerMetricGroup,
                         subtaskMetricGroup);
         this.kafkaCollector = new KafkaCollector();
+
+        ConsumerConfig consumerConfig = new ConsumerConfig(kafkaProperties);
+        groupId = new GroupRebalanceConfig(
+                consumerConfig,
+                GroupRebalanceConfig.ProtocolType.CONSUMER).groupId;
+        this.consumerMetricGroup = consumerMetricGroup;
+        produceTimestampMap = new ConcurrentHashMap<>();
+        statusMap = new ConcurrentHashMap<>();
     }
 
     // ------------------------------------------------------------------------
@@ -139,7 +165,18 @@ public class KafkaFetcher<T> extends AbstractFetcher<T, TopicPartition> {
                     List<ConsumerRecord<byte[], byte[]>> partitionRecords =
                             records.records(partition.getKafkaPartitionHandle());
 
+
                     partitionConsumerRecordsHandler(partitionRecords, partition);
+                    if (!partitionRecords.isEmpty()) {
+                        ConsumerRecord<byte[], byte[]> consumerRecord = partitionRecords.get(
+                                partitionRecords.size() - 1);
+                        long timestamp = consumerRecord.timestamp();
+                        long delay = System.currentTimeMillis() - timestamp;
+                        addGauge(consumerMetricGroup, consumerRecord);
+                        if (new Random().nextInt(1000) == 1) {
+                            LOG.info("produceTimestamp: {}, produceDelay: {}", timestamp, delay);
+                        }
+                    }
                 }
             }
         } finally {
@@ -255,6 +292,41 @@ public class KafkaFetcher<T> extends AbstractFetcher<T, TopicPartition> {
         }
 
         @Override
-        public void close() {}
+        public void close() {
+        }
     }
+
+    private void addGauge(
+            MetricGroup metricGroup,
+            ConsumerRecord consumerRecord) {
+        String topic = consumerRecord.topic();
+        int p = consumerRecord.partition();
+
+        String metricGroupKey = getKey(consumerRecord);
+        produceTimestampMap.put(metricGroupKey, consumerRecord.timestamp());
+
+        if (!statusMap.containsKey(metricGroupKey)) {
+            synchronized (statusMap) {
+                if (!statusMap.containsKey(metricGroupKey)) {
+                    MetricGroup mGroup = metricGroup
+                            .addGroup(OFFSETS_BY_TOPIC_METRICS_GROUP, topic)
+                            .addGroup("group", groupId)
+                            .addGroup(OFFSETS_BY_PARTITION_METRICS_GROUP, p + "");
+                    mGroup.gauge(
+                            "produceDelay",
+                            new ConsumeDelayGauge(produceTimestampMap, metricGroupKey));
+                    mGroup.gauge(
+                            "produceTimestamp",
+                            new RecordTimestampGauge(produceTimestampMap, metricGroupKey));
+                    LOG.info("statusMap: {}", statusMap);
+                    statusMap.put(metricGroupKey, true);
+                }
+            }
+        }
+    }
+
+    private String getKey(ConsumerRecord consumerRecord) {
+        return Joiner.on("#").join(consumerRecord.topic(), groupId, consumerRecord.partition());
+    }
+
 }
