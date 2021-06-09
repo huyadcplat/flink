@@ -28,7 +28,7 @@ under the License.
 
 	<groupId>org.apache.flink</groupId>
 	<artifactId>flink-parent</artifactId>
-	<version>1.12-SNAPSHOT</version>
+	<version>1.12.1</version>
 
 	<name>Flink : </name>
 	<packaging>pom</packaging>
@@ -117,8 +117,8 @@ under the License.
 		<scala.macros.version>2.1.1</scala.macros.version>
 		<!-- Default scala versions, must be overwritten by build profiles, so we set something
 		invalid here -->
-		<scala.version>2.11.12</scala.version>
-		<scala.binary.version>2.11</scala.binary.version>
+		<scala.version>2.12.7</scala.version>
+		<scala.binary.version>2.12</scala.binary.version>
 		<chill.version>0.7.6</chill.version>
 		<zookeeper.version>3.4.14</zookeeper.version>
 		<!-- Only the curator2 TestingServer works with ZK 3.4 -->
@@ -154,7 +154,7 @@ under the License.
 			For Hadoop 2.7, the minor Hadoop version supported for flink-shaded-hadoop-2-uber is 2.7.5
 		-->
 		<hivemetastore.hadoop.version>2.7.5</hivemetastore.hadoop.version>
-		<japicmp.referenceVersion>1.12.2</japicmp.referenceVersion>
+		<japicmp.referenceVersion>1.12.0</japicmp.referenceVersion>
 		<japicmp.outputDir>tools/japicmp-output</japicmp.outputDir>
 		<spotless.version>2.4.2</spotless.version>
 	</properties>
@@ -164,7 +164,7 @@ under the License.
 		<dependency>
 			<groupId>org.apache.flink</groupId>
 			<artifactId>force-shading</artifactId>
-			<version>1.12-SNAPSHOT</version>
+			<version>1.12.1</version>
 		</dependency>
 
 		<!-- Root dependencies for all projects -->
@@ -524,7 +524,7 @@ under the License.
 				<artifactId>jackson-bom</artifactId>
 				<type>pom</type>
 				<scope>import</scope>
-				<version>2.10.5.20201202</version>
+				<version>${jackson.version}</version>
 			</dependency>
 
 			<dependency>
@@ -1320,6 +1320,7 @@ under the License.
 				</pluginManagement>
 			</build>
 		</profile>
+
 	</profiles>
 
 	<build>
@@ -1408,11 +1409,9 @@ under the License.
 						<!-- External web libraries. -->
 						<exclude>docs/**/jquery*</exclude>
 						<exclude>docs/**/bootstrap*</exclude>
-						<exclude>docs/**/anchor*</exclude>
 						<exclude>docs/Gemfile.lock</exclude>
 						<exclude>docs/ruby2/Gemfile.lock</exclude>
 						<exclude>docs/img/*.svg</exclude>
-						<exclude>**/docs/page/fonts/**</exclude>
 						<exclude>**/docs/page/font-awesome/**</exclude>
 						<exclude>**/resources/**/font-awesome/**</exclude>
 						<exclude>**/resources/**/jquery*</exclude>
@@ -1656,7 +1655,7 @@ under the License.
 							<rules>
 								<bannedDependencies>
 									<excludes>
-										<exclude>com.fasterxml.jackson*:*:(,2.10.4]</exclude>
+										<exclude>com.fasterxml.jackson*:*:(,2.10.0]</exclude>
 									</excludes>
 								</bannedDependencies>
 							</rules>
@@ -2101,5 +2100,19 @@ under the License.
 			</plugins>
 		</pluginManagement>
 	</build>
+
+	<distributionManagement>
+		<repository>
+			<id>huya-releases</id>
+			<name>Internal Releases</name>
+			<url>https://nexus.huya.com/repository/releases/</url>
+		</repository>
+		<snapshotRepository>
+			<id>huya-snapshots</id>
+			<name>Internal snapshots</name>
+			<url>https://nexus.huya.com/repository/snapshots/</url>
+		</snapshotRepository>
+	</distributionManagement>
+
 
 </project>

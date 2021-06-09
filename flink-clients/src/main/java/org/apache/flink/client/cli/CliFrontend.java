@@ -255,7 +255,9 @@ public class CliFrontend {
 
         try {
             File jarFile = jarFilePath != null ? getJarFile(jarFilePath) : null;
-            return PackagedProgram.getJobJarAndDependencies(jarFile, entryPointClass);
+            List<URL> url = PackagedProgram.getJobJarAndDependencies(jarFile, entryPointClass);
+            url.addAll(programOptions.getClasspaths());
+            return url;
         } catch (FileNotFoundException | ProgramInvocationException e) {
             throw new CliArgsException(
                     "Could not get job jar and dependencies from JAR file: " + e.getMessage(), e);
