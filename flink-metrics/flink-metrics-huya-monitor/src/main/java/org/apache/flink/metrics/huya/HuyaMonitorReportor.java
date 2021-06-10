@@ -80,6 +80,26 @@ public class HuyaMonitorReportor extends AbstractReporter implements Scheduled {
         }
     }
 
+    @Override
+    public void notifyOfRemovedMetric(Metric metric, String metricName, MetricGroup group) {
+        synchronized (this) {
+            if (metric instanceof Counter) {
+                counters.remove(metric);
+            } else if (metric instanceof Gauge) {
+                gauges.remove(metric);
+            } else if (metric instanceof Histogram) {
+                histograms.remove(metric);
+            } else if (metric instanceof Meter) {
+                meters.remove(metric);
+            } else {
+                log.warn(
+                        "Cannot remove unknown metric type {}. This indicates that the reporter "
+                                + "does not support this metric type.",
+                        metric.getClass().getName());
+            }
+        }
+    }
+
     private static Map<String, String> getTags(MetricGroup group) {
         // Keys are surrounded by brackets: remove them, transforming "<name>" to "name".
         Map<String, String> tags = new HashMap<>();
