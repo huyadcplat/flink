@@ -49,7 +49,7 @@ public class HuyaMonitorReportor extends AbstractReporter implements Scheduled {
 
     protected final Map<Gauge<?>, DGauge> gauges = new ConcurrentHashMap<>();
     protected final Map<Counter, DCounter> counters = new ConcurrentHashMap<>();
-    protected final Map<Histogram, String> histograms = new ConcurrentHashMap<>();
+    protected final Map<Histogram, DHistogram> histograms = new ConcurrentHashMap<>();
     protected final Map<Meter, DMeter> meters = new ConcurrentHashMap<>();
 
     @Override
@@ -71,6 +71,10 @@ public class HuyaMonitorReportor extends AbstractReporter implements Scheduled {
                 Meter m = (Meter) metric;
                 // Only consider rate
                 meters.put(m, new DMeter(m, name, tags));
+            } else if (metric instanceof Histogram) {
+                Histogram m = (Histogram) metric;
+                // Only consider rate
+                histograms.put(m, new DHistogram(m, name, tags));
             } else {
                 log.warn(
                         "Cannot add unknown metric type {}. This indicates that the reporter "
@@ -185,6 +189,12 @@ public class HuyaMonitorReportor extends AbstractReporter implements Scheduled {
         for (DCounter dCounter : counters.values()) {
             if (filterMetric(dCounter)) {
                 entity.addMetric(dCounter);
+            }
+        }
+        for (DHistogram dHistogram: histograms.values()) {
+            if (filterMetric(dHistogram)) {
+                // 获取统计信息
+                entity.addMetric(dHistogram);
             }
         }
         try {

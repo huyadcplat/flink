@@ -25,5 +25,6 @@ public enum MetricType {
      * Datadog-defined format.
      */
     gauge,
-    counter
+    counter,
+    histogram;
 }

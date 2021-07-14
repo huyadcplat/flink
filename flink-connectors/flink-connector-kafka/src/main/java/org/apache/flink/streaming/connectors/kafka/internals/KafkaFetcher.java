@@ -25,6 +25,7 @@ import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.connectors.kafka.KafkaDeserializationSchema;
 import org.apache.flink.streaming.runtime.connector.metrics.ConsumeDelayGauge;
+import org.apache.flink.streaming.runtime.connector.metrics.ProduceTimeGauge;
 import org.apache.flink.streaming.runtime.connector.metrics.RecordTimestampGauge;
 import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
 import org.apache.flink.util.Collector;
@@ -86,7 +87,8 @@ public class KafkaFetcher<T> extends AbstractFetcher<T, TopicPartition> {
     /** user-defined metric. */
     private final MetricGroup consumerMetricGroup;
     private final ConcurrentHashMap<String, Long> produceTimestampMap;
-    private final ConcurrentHashMap<String, Boolean> statusMap;
+
+    private final ConcurrentHashMap<String, ProduceTimeGauge> produceTimestampGaugeMap;
 
     private final String groupId;
 
@@ -138,9 +140,10 @@ public class KafkaFetcher<T> extends AbstractFetcher<T, TopicPartition> {
         groupId = new GroupRebalanceConfig(
                 consumerConfig,
                 GroupRebalanceConfig.ProtocolType.CONSUMER).groupId;
-        this.consumerMetricGroup = consumerMetricGroup;
+        this.consumerMetricGroup = subtaskMetricGroup.addGroup("Consumer", "kafka");
+
         produceTimestampMap = new ConcurrentHashMap<>();
-        statusMap = new ConcurrentHashMap<>();
+        produceTimestampGaugeMap = new ConcurrentHashMap<>();
     }
 
     // ------------------------------------------------------------------------
@@ -170,12 +173,7 @@ public class KafkaFetcher<T> extends AbstractFetcher<T, TopicPartition> {
                     if (!partitionRecords.isEmpty()) {
                         ConsumerRecord<byte[], byte[]> consumerRecord = partitionRecords.get(
                                 partitionRecords.size() - 1);
-                        long timestamp = consumerRecord.timestamp();
-                        long delay = System.currentTimeMillis() - timestamp;
                         addGauge(consumerMetricGroup, consumerRecord);
-                        if (new Random().nextInt(1000) == 1) {
-                            LOG.info("produceTimestamp: {}, produceDelay: {}", timestamp, delay);
-                        }
                     }
                 }
             }
@@ -299,29 +297,36 @@ public class KafkaFetcher<T> extends AbstractFetcher<T, TopicPartition> {
     private void addGauge(
             MetricGroup metricGroup,
             ConsumerRecord consumerRecord) {
+
         String topic = consumerRecord.topic();
         int p = consumerRecord.partition();
-
         String metricGroupKey = getKey(consumerRecord);
-        produceTimestampMap.put(metricGroupKey, consumerRecord.timestamp());
+        ProduceTimeGauge produceTimeGauge = produceTimestampGaugeMap.get(metricGroupKey);
 
-        if (!statusMap.containsKey(metricGroupKey)) {
-            synchronized (statusMap) {
-                if (!statusMap.containsKey(metricGroupKey)) {
+        if (produceTimeGauge == null) {
+            synchronized (produceTimestampGaugeMap) {
+                produceTimeGauge = produceTimestampGaugeMap.get(metricGroupKey);
+                if (produceTimeGauge == null) {
                     MetricGroup mGroup = metricGroup
                             .addGroup(OFFSETS_BY_TOPIC_METRICS_GROUP, topic)
                             .addGroup("group", groupId)
                             .addGroup(OFFSETS_BY_PARTITION_METRICS_GROUP, p + "");
-                    mGroup.gauge(
+                    ConsumeDelayGauge consumeDelayGauge = mGroup.gauge(
                             "produceDelay",
                             new ConsumeDelayGauge(produceTimestampMap, metricGroupKey));
-                    mGroup.gauge(
+                    RecordTimestampGauge recordTimestampGauge = mGroup.gauge(
                             "produceTimestamp",
                             new RecordTimestampGauge(produceTimestampMap, metricGroupKey));
-                    LOG.info("statusMap: {}", statusMap);
-                    statusMap.put(metricGroupKey, true);
+                    produceTimeGauge = new ProduceTimeGauge(
+                            consumeDelayGauge,
+                            recordTimestampGauge);
+                    produceTimestampGaugeMap.put(metricGroupKey, produceTimeGauge);
+                    LOG.info("produceTimestampGaugeMap: {}", produceTimestampGaugeMap);
                 }
             }
+        }
+        if (produceTimeGauge != null) {
+            produceTimeGauge.gauge(consumerRecord.timestamp());
         }
     }
 
@@ -330,3 +335,4 @@ public class KafkaFetcher<T> extends AbstractFetcher<T, TopicPartition> {
     }
 
 }
+

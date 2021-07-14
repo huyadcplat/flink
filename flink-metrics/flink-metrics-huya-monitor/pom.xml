@@ -32,13 +32,13 @@ under the License.
 	</parent>
 
 	<properties>
-		<version>1.12.1.0</version>
+		<version>1.12.1</version>
 		<okhttp.version>3.7.0</okhttp.version>
 
 	</properties>
 
-	<artifactId>flink-metrics-huya-monitor</artifactId>
-	<name>flink-metrics-huya-monitor</name>
+	<artifactId>flink-metrics-huya-monitor_${scala.binary.version}</artifactId>
+	<name>Flink : Metrics : HuyaNeo</name>
 
 	<dependencies>
 
