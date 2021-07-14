@@ -473,10 +473,10 @@ public class SlotPoolImpl implements SlotPool {
         if (timeout != null) {
             // register request timeout
             FutureUtils.orTimeout(
-                            pendingRequest.getAllocatedSlotFuture(),
-                            timeout.toMilliseconds(),
-                            TimeUnit.MILLISECONDS,
-                            componentMainThreadExecutor)
+                    pendingRequest.getAllocatedSlotFuture(),
+                    timeout.toMilliseconds(),
+                    TimeUnit.MILLISECONDS,
+                    componentMainThreadExecutor)
                     .whenComplete(
                             (AllocatedSlot ignored, Throwable throwable) -> {
                                 if (throwable instanceof TimeoutException) {
@@ -607,8 +607,9 @@ public class SlotPoolImpl implements SlotPool {
 
         if (pendingRequest != null) {
             log.debug(
-                    "Fulfilling pending slot request [{}] with slot [{}]",
+                    "Fulfilling pending slot request [{}] allocationId [{}] with slot [{}] ",
                     pendingRequest.getSlotRequestId(),
+                    pendingRequest.getAllocationId().orElse(null),
                     allocatedSlot.getAllocationId());
 
             removePendingRequest(pendingRequest.getSlotRequestId());
@@ -634,6 +635,13 @@ public class SlotPoolImpl implements SlotPool {
     private PendingRequest findMatchingPendingRequest(final AllocatedSlot slot) {
         final ResourceProfile slotResources = slot.getResourceProfile();
 
+        // 优先满足申请该slot的请求
+        for (PendingRequest request : pendingRequests.values()) {
+            if (slot.getAllocationId().equals(request.getAllocationId().orElseGet(null)) &&
+                    slotResources.isMatching(request.getResourceProfile())) {
+                return request;
+            }
+        }
         // try the requests sent to the resource manager first
         for (PendingRequest request : pendingRequests.values()) {
             if (slotResources.isMatching(request.getResourceProfile())) {
@@ -1038,16 +1046,16 @@ public class SlotPoolImpl implements SlotPool {
 
     private Set<ResourceProfile> getAllocatedResourceProfiles() {
         return Stream.concat(
-                        getAvailableSlotsInformation().stream(),
-                        getAllocatedSlotsInformation().stream())
+                getAvailableSlotsInformation().stream(),
+                getAllocatedSlotsInformation().stream())
                 .map(SlotInfo::getResourceProfile)
                 .collect(Collectors.toSet());
     }
 
     private Collection<PendingRequest> getPendingBatchRequests() {
         return Stream.concat(
-                        pendingRequests.values().stream(),
-                        waitingForResourceManager.values().stream())
+                pendingRequests.values().stream(),
+                waitingForResourceManager.values().stream())
                 .filter(PendingRequest::isBatchRequest)
                 .collect(Collectors.toList());
     }

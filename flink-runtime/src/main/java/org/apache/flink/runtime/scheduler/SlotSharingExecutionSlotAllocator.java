@@ -35,6 +35,8 @@ import org.apache.flink.util.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -132,8 +134,21 @@ class SlotSharingExecutionSlotAllocator implements ExecutionSlotAllocator {
                         .collect(
                                 Collectors.groupingBy(
                                         slotSharingStrategy::getExecutionSlotSharingGroup));
+        List<ExecutionSlotSharingGroup> executionSlotSharingGroups = executionsByGroup
+                .keySet()
+                .stream()
+                .sorted(Comparator.comparingInt(o -> o.getExecutionVertexIds().size()))
+                .collect(Collectors.toList());
+        Collections.reverse(executionSlotSharingGroups);
+
+        LOG.info("sorted executionSlotSharingGroups: {}",
+                executionSlotSharingGroups
+                        .stream()
+                        .map(ExecutionSlotSharingGroup::getExecutionVertexIds)
+                        .collect(Collectors.toList()));
+
         Map<ExecutionSlotSharingGroup, SharedSlot> slots =
-                executionsByGroup.keySet().stream()
+                executionSlotSharingGroups.stream()
                         .map(group -> getOrAllocateSharedSlot(group, sharedSlotProfileRetriever))
                         .collect(
                                 Collectors.toMap(

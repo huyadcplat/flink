@@ -937,11 +937,14 @@ public class SlotManagerImpl implements SlotManager {
         final ResourceProfile resourceProfile = pendingSlotRequest.getResourceProfile();
 
         OptionalConsumer.of(findMatchingSlot(resourceProfile))
-                .ifPresent(taskManagerSlot -> allocateSlot(taskManagerSlot, pendingSlotRequest))
+                .ifPresent(taskManagerSlot -> {
+                    LOG.info("AllocationId: {}, allocateSlot: {}", pendingSlotRequest.getAllocationId(), taskManagerSlot);
+
+                    allocateSlot(taskManagerSlot, pendingSlotRequest);})
                 .ifNotPresent(
-                        () ->
+                        () -> {
                                 fulfillPendingSlotRequestWithPendingTaskManagerSlot(
-                                        pendingSlotRequest));
+                                        pendingSlotRequest);});
     }
 
     private void fulfillPendingSlotRequestWithPendingTaskManagerSlot(
