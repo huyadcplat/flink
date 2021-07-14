@@ -18,14 +18,14 @@
 
 package org.apache.flink.runtime.checkpoint;
 
-import org.apache.flink.runtime.concurrent.FutureUtils;
+import org.apache.flink.util.concurrent.FutureUtils;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.flink.runtime.concurrent.FutureUtils.checkStateAndGet;
 import static org.apache.flink.util.Preconditions.checkState;
+import static org.apache.flink.util.concurrent.FutureUtils.checkStateAndGet;
 
 /**
  * A builder for {@link CheckpointMetrics}.
@@ -133,6 +133,18 @@ public class CheckpointMetricsBuilder {
                 checkStateAndGet(bytesProcessedDuringAlignment),
                 bytesPersistedDuringAlignment,
                 checkStateAndGet(alignmentDurationNanos),
+                syncDurationMillis,
+                asyncDurationMillis,
+                checkpointStartDelayNanos,
+                unalignedCheckpoint,
+                totalBytesPersisted);
+    }
+
+    public CheckpointMetrics buildIncomplete() {
+        return new CheckpointMetrics(
+                bytesProcessedDuringAlignment.getNow(CheckpointMetrics.UNSET),
+                bytesPersistedDuringAlignment,
+                alignmentDurationNanos.getNow(CheckpointMetrics.UNSET),
                 syncDurationMillis,
                 asyncDurationMillis,
                 checkpointStartDelayNanos,

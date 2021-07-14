@@ -22,13 +22,19 @@ import org.apache.flink.api.common.time.Time;
 import org.apache.flink.core.testutils.FlinkMatchers;
 import org.apache.flink.core.testutils.OneShotLatch;
 import org.apache.flink.runtime.messages.Acknowledge;
-import org.apache.flink.runtime.testingUtils.TestingUtils;
+import org.apache.flink.runtime.testutils.TestingUtils;
+import org.apache.flink.testutils.executor.TestExecutorResource;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.TestLogger;
+import org.apache.flink.util.concurrent.ExponentialBackoffRetryStrategy;
+import org.apache.flink.util.concurrent.FixedRetryStrategy;
+import org.apache.flink.util.concurrent.FutureUtils;
+import org.apache.flink.util.concurrent.ScheduledExecutorServiceAdapter;
 
 import org.junit.Assert;
+import org.junit.ClassRule;
 import org.junit.Test;
 
 import java.time.Duration;
@@ -39,6 +45,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -66,6 +73,10 @@ import static org.junit.Assert.fail;
 
 /** Tests for the utility methods in {@link FutureUtils}. */
 public class FutureUtilsTest extends TestLogger {
+
+    @ClassRule
+    public static final TestExecutorResource<ScheduledExecutorService> TEST_EXECUTOR_RESOURCE =
+            new TestExecutorResource<>(Executors::newSingleThreadScheduledExecutor);
 
     /** Tests that we can retry an operation. */
     @Test
@@ -213,7 +224,7 @@ public class FutureUtilsTest extends TestLogger {
                         TestingUtils.defaultScheduledExecutor());
 
         try {
-            retryFuture.get(TestingUtils.TIMEOUT().toMilliseconds(), TimeUnit.MILLISECONDS);
+            retryFuture.get(TestingUtils.TIMEOUT.toMilliseconds(), TimeUnit.MILLISECONDS);
         } catch (ExecutionException ee) {
             throw ExceptionUtils.stripExecutionException(ee);
         }
@@ -231,7 +242,7 @@ public class FutureUtilsTest extends TestLogger {
                         TestingUtils.defaultScheduledExecutor());
 
         try {
-            retryFuture.get(TestingUtils.TIMEOUT().toMilliseconds(), TimeUnit.MILLISECONDS);
+            retryFuture.get(TestingUtils.TIMEOUT.toMilliseconds(), TimeUnit.MILLISECONDS);
         } catch (ExecutionException ee) {
             throw ExceptionUtils.stripExecutionException(ee);
         }
@@ -409,7 +420,7 @@ public class FutureUtilsTest extends TestLogger {
 
     @Test
     public void testRetryWithDelayAndPredicate() throws Exception {
-        final ScheduledExecutorService retryExecutor = Executors.newSingleThreadScheduledExecutor();
+        final ScheduledExecutorService retryExecutor = TEST_EXECUTOR_RESOURCE.getExecutor();
         final String retryableExceptionMessage = "first exception";
         class TestStringSupplier implements Supplier<CompletableFuture<String>> {
             private final AtomicInteger counter = new AtomicInteger();
@@ -440,8 +451,6 @@ public class FutureUtilsTest extends TestLogger {
                     .get();
         } catch (final ExecutionException e) {
             assertThat(e.getMessage(), containsString("should propagate"));
-        } finally {
-            retryExecutor.shutdownNow();
         }
     }
 
@@ -951,6 +960,62 @@ public class FutureUtilsTest extends TestLogger {
         final CompletableFuture<Integer> completableFuture = new CompletableFuture<>();
 
         assertNull(FutureUtils.getWithoutException(completableFuture));
+    }
+
+    @Test
+    public void testSwitchExecutorForNormallyCompletedFuture() {
+        final CompletableFuture<String> source = new CompletableFuture<>();
+
+        final ExecutorService singleThreadExecutor = TEST_EXECUTOR_RESOURCE.getExecutor();
+
+        final CompletableFuture<String> resultFuture =
+                FutureUtils.switchExecutor(source, singleThreadExecutor);
+
+        final String expectedThreadName =
+                FutureUtils.supplyAsync(
+                                () -> Thread.currentThread().getName(), singleThreadExecutor)
+                        .join();
+        final String expectedValue = "foobar";
+
+        final CompletableFuture<Void> assertionFuture =
+                resultFuture.handle(
+                        (s, throwable) -> {
+                            assertThat(s, is(expectedValue));
+                            assertThat(Thread.currentThread().getName(), is(expectedThreadName));
+
+                            return null;
+                        });
+        source.complete(expectedValue);
+
+        assertionFuture.join();
+    }
+
+    @Test
+    public void testSwitchExecutorForExceptionallyCompletedFuture() {
+        final CompletableFuture<String> source = new CompletableFuture<>();
+
+        final ExecutorService singleThreadExecutor = TEST_EXECUTOR_RESOURCE.getExecutor();
+
+        final CompletableFuture<String> resultFuture =
+                FutureUtils.switchExecutor(source, singleThreadExecutor);
+
+        final String expectedThreadName =
+                FutureUtils.supplyAsync(
+                                () -> Thread.currentThread().getName(), singleThreadExecutor)
+                        .join();
+        final Exception expectedException = new Exception("foobar");
+
+        final CompletableFuture<Void> assertionFuture =
+                resultFuture.handle(
+                        (s, throwable) -> {
+                            assertThat(throwable, FlinkMatchers.containsCause(expectedException));
+                            assertThat(Thread.currentThread().getName(), is(expectedThreadName));
+
+                            return null;
+                        });
+        source.completeExceptionally(expectedException);
+
+        assertionFuture.join();
     }
 
     private static Throwable getThrowable(CompletableFuture<?> completableFuture) {

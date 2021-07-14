@@ -24,7 +24,6 @@ import org.apache.flink.runtime.clusterframework.types.AllocationID;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
 import org.apache.flink.runtime.clusterframework.types.ResourceProfile;
 import org.apache.flink.runtime.clusterframework.types.SlotID;
-import org.apache.flink.runtime.concurrent.Executors;
 import org.apache.flink.runtime.resourcemanager.ResourceManagerId;
 import org.apache.flink.runtime.resourcemanager.SlotRequest;
 import org.apache.flink.runtime.resourcemanager.WorkerResourceSpec;
@@ -37,6 +36,7 @@ import org.apache.flink.runtime.taskexecutor.TaskExecutorGateway;
 import org.apache.flink.runtime.taskexecutor.TestingTaskExecutorGatewayBuilder;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.TestLogger;
+import org.apache.flink.util.concurrent.Executors;
 
 import org.junit.Test;
 
@@ -111,7 +111,7 @@ public class SlotManagerFailUnfulfillableTest extends TestLogger {
         // setup
         final ResourceProfile availableProfile = ResourceProfile.fromResources(2.0, 100);
         final ResourceProfile newTmProfile =
-                SlotManagerImpl.generateDefaultSlotResourceProfile(WORKER_RESOURCE_SPEC, 1);
+                SlotManagerUtils.generateDefaultSlotResourceProfile(WORKER_RESOURCE_SPEC, 1);
 
         final SlotManager slotManager = createSlotManagerStartingNewTMs();
         slotManager.setFailUnfulfillableRequest(false);
@@ -173,7 +173,7 @@ public class SlotManagerFailUnfulfillableTest extends TestLogger {
         // setup
         final ResourceProfile availableProfile = ResourceProfile.fromResources(2.0, 100);
         final ResourceProfile newTmProfile =
-                SlotManagerImpl.generateDefaultSlotResourceProfile(WORKER_RESOURCE_SPEC, 1);
+                SlotManagerUtils.generateDefaultSlotResourceProfile(WORKER_RESOURCE_SPEC, 1);
 
         final SlotManager slotManager = createSlotManagerStartingNewTMs();
         registerFreeSlot(slotManager, availableProfile);

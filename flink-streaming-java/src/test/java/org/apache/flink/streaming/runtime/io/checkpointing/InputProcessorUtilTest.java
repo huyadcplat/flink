@@ -33,6 +33,7 @@ import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
 import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.SyncMailboxExecutor;
+import org.apache.flink.streaming.runtime.tasks.TestProcessingTimeService;
 import org.apache.flink.streaming.runtime.tasks.TestSubtaskCheckpointCoordinator;
 import org.apache.flink.streaming.util.MockStreamTask;
 import org.apache.flink.streaming.util.MockStreamTaskBuilder;
@@ -68,22 +69,28 @@ public class InputProcessorUtilTest {
                         Collections.singletonList(getGate(0, 2)),
                     };
 
-            CheckpointedInputGate[] checkpointedMultipleInputGate =
-                    InputProcessorUtil.createCheckpointedMultipleInputGate(
+            CheckpointBarrierHandler barrierHandler =
+                    InputProcessorUtil.createCheckpointBarrierHandler(
                             streamTask,
                             streamConfig,
                             new TestSubtaskCheckpointCoordinator(new MockChannelStateWriter()),
-                            environment.getMetricGroup().getIOMetricGroup(),
                             streamTask.getName(),
+                            inputGates,
+                            Collections.emptyList(),
+                            new SyncMailboxExecutor(),
+                            new TestProcessingTimeService());
+
+            CheckpointedInputGate[] checkpointedMultipleInputGate =
+                    InputProcessorUtil.createCheckpointedMultipleInputGate(
                             new SyncMailboxExecutor(),
                             inputGates,
-                            Collections.emptyList());
+                            environment.getMetricGroup().getIOMetricGroup(),
+                            barrierHandler,
+                            streamConfig);
+
             for (CheckpointedInputGate checkpointedInputGate : checkpointedMultipleInputGate) {
                 registry.registerCloseable(checkpointedInputGate);
             }
-
-            CheckpointBarrierHandler barrierHandler =
-                    checkpointedMultipleInputGate[0].getCheckpointBarrierHandler();
 
             List<IndexedInputGate> allInputGates =
                     Arrays.stream(inputGates)

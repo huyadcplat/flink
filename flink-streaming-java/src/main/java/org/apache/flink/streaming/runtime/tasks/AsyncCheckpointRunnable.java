@@ -35,6 +35,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -49,10 +51,10 @@ final class AsyncCheckpointRunnable implements Runnable, Closeable {
 
     public static final Logger LOG = LoggerFactory.getLogger(AsyncCheckpointRunnable.class);
     private final String taskName;
-    private final Consumer<AsyncCheckpointRunnable> registerConsumer;
     private final Consumer<AsyncCheckpointRunnable> unregisterConsumer;
     private final Supplier<Boolean> isTaskRunning;
     private final Environment taskEnvironment;
+    private final CompletableFuture<Void> finishedFuture = new CompletableFuture<>();
 
     public boolean isRunning() {
         return asyncCheckpointState.get() == AsyncCheckpointState.RUNNING;
@@ -78,7 +80,6 @@ final class AsyncCheckpointRunnable implements Runnable, Closeable {
             CheckpointMetricsBuilder checkpointMetrics,
             long asyncConstructionNanos,
             String taskName,
-            Consumer<AsyncCheckpointRunnable> register,
             Consumer<AsyncCheckpointRunnable> unregister,
             Environment taskEnvironment,
             AsyncExceptionHandler asyncExceptionHandler,
@@ -89,7 +90,6 @@ final class AsyncCheckpointRunnable implements Runnable, Closeable {
         this.checkpointMetrics = checkNotNull(checkpointMetrics);
         this.asyncConstructionNanos = asyncConstructionNanos;
         this.taskName = checkNotNull(taskName);
-        this.registerConsumer = register;
         this.unregisterConsumer = unregister;
         this.taskEnvironment = checkNotNull(taskEnvironment);
         this.asyncExceptionHandler = checkNotNull(asyncExceptionHandler);
@@ -108,8 +108,6 @@ final class AsyncCheckpointRunnable implements Runnable, Closeable {
 
         FileSystemSafetyNet.initializeSafetyNetForThread();
         try {
-
-            registerConsumer.accept(this);
 
             TaskStateSnapshot jobManagerTaskOperatorSubtaskStates =
                     new TaskStateSnapshot(operatorSnapshotsInProgress.size());
@@ -165,6 +163,8 @@ final class AsyncCheckpointRunnable implements Runnable, Closeable {
                         taskName,
                         checkpointMetaData.getCheckpointId());
             }
+
+            finishedFuture.complete(null);
         } catch (Exception e) {
             LOG.info(
                     "{} - asynchronous part of checkpoint {} could not be completed.",
@@ -172,6 +172,7 @@ final class AsyncCheckpointRunnable implements Runnable, Closeable {
                     checkpointMetaData.getCheckpointId(),
                     e);
             handleExecutionException(e);
+            finishedFuture.completeExceptionally(e);
         } finally {
             unregisterConsumer.accept(this);
             FileSystemSafetyNet.closeSafetyNetAndGuardedResourcesForThread();
@@ -220,7 +221,8 @@ final class AsyncCheckpointRunnable implements Runnable, Closeable {
     }
 
     private void reportAbortedSnapshotStats(long stateSize) {
-        CheckpointMetrics metrics = checkpointMetrics.setTotalBytesPersisted(stateSize).build();
+        CheckpointMetrics metrics =
+                checkpointMetrics.setTotalBytesPersisted(stateSize).buildIncomplete();
         LOG.trace(
                 "{} - report failed checkpoint stats: {} {}",
                 taskName,
@@ -263,11 +265,20 @@ final class AsyncCheckpointRunnable implements Runnable, Closeable {
                     // Otherwise this followup exception could race the original exception in
                     // failing the task.
                     try {
+                        Optional<CheckpointException> underlyingCheckpointException =
+                                ExceptionUtils.findThrowable(
+                                        checkpointException, CheckpointException.class);
+
+                        // If this failure is already a CheckpointException, do not overwrite the
+                        // original CheckpointFailureReason
+                        CheckpointFailureReason reportedFailureReason =
+                                underlyingCheckpointException
+                                        .map(exception -> exception.getCheckpointFailureReason())
+                                        .orElse(CheckpointFailureReason.CHECKPOINT_ASYNC_EXCEPTION);
                         taskEnvironment.declineCheckpoint(
                                 checkpointMetaData.getCheckpointId(),
                                 new CheckpointException(
-                                        CheckpointFailureReason.CHECKPOINT_ASYNC_EXCEPTION,
-                                        checkpointException));
+                                        reportedFailureReason, checkpointException));
                     } catch (Exception unhandled) {
                         AsynchronousException asyncException = new AsynchronousException(unhandled);
                         asyncExceptionHandler.handleAsyncException(
@@ -277,10 +288,9 @@ final class AsyncCheckpointRunnable implements Runnable, Closeable {
                 } else {
                     // We never decline checkpoint after task is not running to avoid unexpected job
                     // failover, which caused by exceeding checkpoint tolerable failure threshold.
-                    LOG.warn(
-                            "As task is already not running, no longer decline checkpoint {}.",
-                            checkpointMetaData.getCheckpointId(),
-                            checkpointException);
+                    LOG.info(
+                            "Ignore decline of checkpoint {} as task is not running anymore.",
+                            checkpointMetaData.getCheckpointId());
                 }
 
                 currentState = AsyncCheckpointState.DISCARDED;
@@ -316,6 +326,10 @@ final class AsyncCheckpointRunnable implements Runnable, Closeable {
 
     long getCheckpointId() {
         return checkpointMetaData.getCheckpointId();
+    }
+
+    public CompletableFuture<Void> getFinishedFuture() {
+        return finishedFuture;
     }
 
     /** @return discarded state size (if available). */

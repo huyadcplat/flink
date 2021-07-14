@@ -21,6 +21,7 @@ package org.apache.flink.table.runtime.operators.python.aggregate.arrow.batch;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.fnexecution.v1.FlinkFnApi;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
@@ -102,7 +103,9 @@ public class BatchArrowPythonGroupWindowAggregateFunctionOperator
                 outputType,
                 groupKey,
                 groupingSet,
-                udafInputOffsets);
+                udafInputOffsets,
+                FlinkFnApi.CoderParam.DataType.ARROW,
+                FlinkFnApi.CoderParam.DataType.ARROW);
         this.namedProperties = namedProperties;
         this.inputTimeFieldIndex = inputTimeFieldIndex;
         this.maxLimitSize = maxLimitSize;
@@ -175,6 +178,7 @@ public class BatchArrowPythonGroupWindowAggregateFunctionOperator
             windowAggResult.replace(key, arrowSerializer.read(i));
             rowDataWrapper.collect(reuseJoinedRow.replace(windowAggResult, windowProperty));
         }
+        arrowSerializer.resetReader();
     }
 
     private void triggerWindowProcess() throws Exception {
@@ -195,6 +199,7 @@ public class BatchArrowPythonGroupWindowAggregateFunctionOperator
                 checkInvokeFinishBundleByCount();
                 currentBatchCount = 0;
                 baos.reset();
+                arrowSerializer.resetWriter();
             }
         }
     }

@@ -26,7 +26,6 @@ import org.apache.flink.runtime.clusterframework.types.ResourceID;
 import org.apache.flink.runtime.clusterframework.types.ResourceProfile;
 import org.apache.flink.runtime.clusterframework.types.SlotID;
 import org.apache.flink.runtime.concurrent.ComponentMainThreadExecutor;
-import org.apache.flink.runtime.concurrent.FutureUtils;
 import org.apache.flink.runtime.executiongraph.ExecutionGraph;
 import org.apache.flink.runtime.jobmanager.scheduler.NoResourceAvailableException;
 import org.apache.flink.runtime.jobmanager.slots.TaskManagerGateway;
@@ -46,6 +45,7 @@ import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.clock.Clock;
+import org.apache.flink.util.concurrent.FutureUtils;
 
 import org.apache.flink.shaded.guava18.com.google.common.collect.Iterables;
 
@@ -193,7 +193,7 @@ public class SlotPoolImpl implements SlotPool, SlotPoolService {
     }
 
     @VisibleForTesting
-    DualKeyLinkedMap<SlotRequestId, AllocationID, PendingRequest> getPendingRequests() {
+    public DualKeyLinkedMap<SlotRequestId, AllocationID, PendingRequest> getPendingRequests() {
         return pendingRequests;
     }
 
@@ -230,25 +230,6 @@ public class SlotPoolImpl implements SlotPool, SlotPoolService {
             scheduleRunAsync(
                     this::scheduledLogStatus, STATUS_LOG_INTERVAL_MS, TimeUnit.MILLISECONDS);
         }
-    }
-
-    /** Suspends this pool, meaning it has lost its authority to accept and distribute slots. */
-    @Override
-    public void suspend() {
-
-        componentMainThreadExecutor.assertRunningInMainThread();
-
-        log.info("Suspending SlotPool.");
-
-        cancelPendingSlotRequests();
-
-        // do not accept any requests
-        jobMasterId = null;
-        resourceManagerGateway = null;
-
-        // Clear (but not release!) the available slots. The TaskManagers should re-register them
-        // at the new leader JobManager/SlotPool
-        clear();
     }
 
     private void cancelPendingSlotRequests() {

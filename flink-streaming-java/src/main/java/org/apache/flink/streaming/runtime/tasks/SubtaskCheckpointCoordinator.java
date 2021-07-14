@@ -43,8 +43,15 @@ import java.util.function.Supplier;
 @Internal
 public interface SubtaskCheckpointCoordinator extends Closeable {
 
+    /**
+     * TODO Whether enables checkpoints after tasks finished. This is a temporary flag and will be
+     * removed in the last PR.
+     */
+    void setEnableCheckpointAfterTasksFinished(boolean enableCheckpointAfterTasksFinished);
+
     /** Initialize new checkpoint. */
-    void initCheckpoint(long id, CheckpointOptions checkpointOptions) throws IOException;
+    void initInputsCheckpoint(long id, CheckpointOptions checkpointOptions)
+            throws CheckpointException;
 
     ChannelStateWriter getChannelStateWriter();
 
@@ -54,7 +61,7 @@ public interface SubtaskCheckpointCoordinator extends Closeable {
             long checkpointId, CheckpointException cause, OperatorChain<?, ?> operatorChain)
             throws IOException;
 
-    /** Must be called after {@link #initCheckpoint(long, CheckpointOptions)}. */
+    /** Must be called after {@link #initInputsCheckpoint(long, CheckpointOptions)}. */
     void checkpointState(
             CheckpointMetaData checkpointMetaData,
             CheckpointOptions checkpointOptions,
@@ -84,4 +91,7 @@ public interface SubtaskCheckpointCoordinator extends Closeable {
     void notifyCheckpointAborted(
             long checkpointId, OperatorChain<?, ?> operatorChain, Supplier<Boolean> isRunning)
             throws Exception;
+
+    /** Waits for all the pending checkpoints to finish their asynchronous step. */
+    void waitForPendingCheckpoints() throws Exception;
 }

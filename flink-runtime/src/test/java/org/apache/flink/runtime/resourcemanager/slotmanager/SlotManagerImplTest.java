@@ -28,8 +28,6 @@ import org.apache.flink.runtime.clusterframework.types.AllocationID;
 import org.apache.flink.runtime.clusterframework.types.ResourceID;
 import org.apache.flink.runtime.clusterframework.types.ResourceProfile;
 import org.apache.flink.runtime.clusterframework.types.SlotID;
-import org.apache.flink.runtime.concurrent.FutureUtils;
-import org.apache.flink.runtime.concurrent.ScheduledExecutor;
 import org.apache.flink.runtime.instance.InstanceID;
 import org.apache.flink.runtime.messages.Acknowledge;
 import org.apache.flink.runtime.resourcemanager.ResourceManagerId;
@@ -44,9 +42,11 @@ import org.apache.flink.runtime.taskexecutor.TestingTaskExecutorGateway;
 import org.apache.flink.runtime.taskexecutor.TestingTaskExecutorGatewayBuilder;
 import org.apache.flink.runtime.taskexecutor.exceptions.SlotAllocationException;
 import org.apache.flink.runtime.taskexecutor.exceptions.SlotOccupiedException;
-import org.apache.flink.runtime.testingUtils.TestingUtils;
+import org.apache.flink.runtime.testutils.TestingUtils;
 import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.TestLogger;
+import org.apache.flink.util.concurrent.FutureUtils;
+import org.apache.flink.util.concurrent.ScheduledExecutor;
 import org.apache.flink.util.function.FunctionUtils;
 import org.apache.flink.util.function.ThrowingRunnable;
 
@@ -1504,6 +1504,69 @@ public class SlotManagerImplTest extends TestLogger {
         }
     }
 
+    @Test
+    public void testGetResourceOverview() throws Exception {
+        final ResourceManagerId resourceManagerId = ResourceManagerId.generate();
+        final ResourceActions resourceManagerActions = new TestingResourceActionsBuilder().build();
+
+        final TaskExecutorGateway taskExecutorGateway =
+                new TestingTaskExecutorGatewayBuilder().createTestingTaskExecutorGateway();
+        final ResourceID resourceId1 = ResourceID.generate();
+        final ResourceID resourceId2 = ResourceID.generate();
+        final TaskExecutorConnection taskManagerConnection1 =
+                new TaskExecutorConnection(resourceId1, taskExecutorGateway);
+        final TaskExecutorConnection taskManagerConnection2 =
+                new TaskExecutorConnection(resourceId2, taskExecutorGateway);
+
+        final SlotID slotId1 = new SlotID(resourceId1, 0);
+        final SlotID slotId2 = new SlotID(resourceId1, 1);
+        final SlotID slotId3 = new SlotID(resourceId2, 0);
+        final SlotID slotId4 = new SlotID(resourceId2, 1);
+        final ResourceProfile resourceProfile1 = ResourceProfile.fromResources(1, 10);
+        final ResourceProfile resourceProfile2 = ResourceProfile.fromResources(2, 20);
+        final SlotStatus slotStatus1 = new SlotStatus(slotId1, resourceProfile1);
+        final SlotStatus slotStatus2 =
+                new SlotStatus(slotId2, resourceProfile1, new JobID(), new AllocationID());
+        final SlotStatus slotStatus3 = new SlotStatus(slotId3, resourceProfile2);
+        final SlotStatus slotStatus4 =
+                new SlotStatus(slotId4, resourceProfile2, new JobID(), new AllocationID());
+        final SlotReport slotReport1 = new SlotReport(Arrays.asList(slotStatus1, slotStatus2));
+        final SlotReport slotReport2 = new SlotReport(Arrays.asList(slotStatus3, slotStatus4));
+
+        try (SlotManagerImpl slotManager =
+                createSlotManager(resourceManagerId, resourceManagerActions)) {
+            slotManager.registerTaskManager(
+                    taskManagerConnection1,
+                    slotReport1,
+                    resourceProfile1.multiply(2),
+                    resourceProfile1);
+            slotManager.registerTaskManager(
+                    taskManagerConnection2,
+                    slotReport2,
+                    resourceProfile2.multiply(2),
+                    resourceProfile2);
+
+            assertThat(
+                    slotManager.getFreeResource(),
+                    equalTo(resourceProfile1.merge(resourceProfile2)));
+            assertThat(
+                    slotManager.getFreeResourceOf(taskManagerConnection1.getInstanceID()),
+                    equalTo(resourceProfile1));
+            assertThat(
+                    slotManager.getFreeResourceOf(taskManagerConnection2.getInstanceID()),
+                    equalTo(resourceProfile2));
+            assertThat(
+                    slotManager.getRegisteredResource(),
+                    equalTo(resourceProfile1.merge(resourceProfile2).multiply(2)));
+            assertThat(
+                    slotManager.getRegisteredResourceOf(taskManagerConnection1.getInstanceID()),
+                    equalTo(resourceProfile1.multiply(2)));
+            assertThat(
+                    slotManager.getRegisteredResourceOf(taskManagerConnection2.getInstanceID()),
+                    equalTo(resourceProfile2.multiply(2)));
+        }
+    }
+
     private Set<AllocationID> extractFailedAllocationsForJob(
             JobID jobId2,
             Map<JobID, List<Tuple2<JobID, AllocationID>>> job2AndJob3FailedAllocationInfo) {
@@ -1638,7 +1701,7 @@ public class SlotManagerImplTest extends TestLogger {
         final int numberSlots = 3;
         final TestingResourceActions resourceActions = new TestingResourceActionsBuilder().build();
         final ResourceProfile resourceProfile =
-                SlotManagerImpl.generateDefaultSlotResourceProfile(
+                SlotManagerUtils.generateDefaultSlotResourceProfile(
                         WORKER_RESOURCE_SPEC, numberSlots);
 
         try (final SlotManagerImpl slotManager =
@@ -1944,30 +2007,5 @@ public class SlotManagerImplTest extends TestLogger {
                 firstSlotReport,
                 ResourceProfile.ANY,
                 ResourceProfile.ANY);
-    }
-
-    @Test
-    public void testGenerateDefaultSlotProfile() {
-        final int numSlots = 5;
-        final ResourceProfile resourceProfile =
-                ResourceProfile.newBuilder()
-                        .setCpuCores(1.0)
-                        .setTaskHeapMemoryMB(1)
-                        .setTaskOffHeapMemoryMB(2)
-                        .setNetworkMemoryMB(3)
-                        .setManagedMemoryMB(4)
-                        .build();
-        final WorkerResourceSpec workerResourceSpec =
-                new WorkerResourceSpec.Builder()
-                        .setCpuCores(1.0 * numSlots)
-                        .setTaskHeapMemoryMB(1 * numSlots)
-                        .setTaskOffHeapMemoryMB(2 * numSlots)
-                        .setNetworkMemoryMB(3 * numSlots)
-                        .setManagedMemoryMB(4 * numSlots)
-                        .build();
-
-        assertThat(
-                SlotManagerImpl.generateDefaultSlotResourceProfile(workerResourceSpec, numSlots),
-                is(resourceProfile));
     }
 }

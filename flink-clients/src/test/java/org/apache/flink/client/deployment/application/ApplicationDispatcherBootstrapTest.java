@@ -31,8 +31,6 @@ import org.apache.flink.configuration.PipelineOptionsInternal;
 import org.apache.flink.runtime.client.JobCancellationException;
 import org.apache.flink.runtime.client.JobExecutionException;
 import org.apache.flink.runtime.clusterframework.ApplicationStatus;
-import org.apache.flink.runtime.concurrent.ScheduledExecutor;
-import org.apache.flink.runtime.concurrent.ScheduledExecutorServiceAdapter;
 import org.apache.flink.runtime.dispatcher.DispatcherGateway;
 import org.apache.flink.runtime.jobmanager.HighAvailabilityMode;
 import org.apache.flink.runtime.jobmaster.JobResult;
@@ -44,6 +42,9 @@ import org.apache.flink.util.ExecutorUtils;
 import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.SerializedThrowable;
+import org.apache.flink.util.TestLogger;
+import org.apache.flink.util.concurrent.ScheduledExecutor;
+import org.apache.flink.util.concurrent.ScheduledExecutorServiceAdapter;
 
 import org.junit.After;
 import org.junit.Test;
@@ -67,7 +68,7 @@ import static org.junit.Assert.assertThat;
 import static org.junit.Assert.fail;
 
 /** Tests for the {@link ApplicationDispatcherBootstrap}. */
-public class ApplicationDispatcherBootstrapTest {
+public class ApplicationDispatcherBootstrapTest extends TestLogger {
 
     private static final String MULTI_EXECUTE_JOB_CLASS_NAME =
             "org.apache.flink.client.testjar.MultiExecuteJob";

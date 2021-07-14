@@ -21,8 +21,8 @@ package org.apache.flink.client.program;
 import org.apache.flink.api.common.ProgramDescription;
 import org.apache.flink.client.ClientUtils;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.core.security.FlinkSecurityManager;
 import org.apache.flink.runtime.jobgraph.SavepointRestoreSettings;
-import org.apache.flink.runtime.security.FlinkSecurityManager;
 import org.apache.flink.util.InstantiationUtil;
 import org.apache.flink.util.JarUtils;
 
@@ -43,6 +43,7 @@ import java.lang.reflect.Modifier;
 import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -89,7 +90,7 @@ public class PackagedProgram implements AutoCloseable {
 
     private final List<URL> classpaths;
 
-    private final ClassLoader userCodeClassLoader;
+    private final URLClassLoader userCodeClassLoader;
 
     private final SavepointRestoreSettings savepointSettings;
 
@@ -624,6 +625,11 @@ public class PackagedProgram implements AutoCloseable {
 
     @Override
     public void close() {
+        try {
+            userCodeClassLoader.close();
+        } catch (IOException e) {
+            LOG.debug("Error while closing user-code classloader.", e);
+        }
         try {
             deleteExtractedLibraries();
         } catch (Exception e) {

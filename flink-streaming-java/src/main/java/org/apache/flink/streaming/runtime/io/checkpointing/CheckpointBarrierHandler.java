@@ -23,10 +23,11 @@ import org.apache.flink.runtime.checkpoint.CheckpointFailureReason;
 import org.apache.flink.runtime.checkpoint.CheckpointMetaData;
 import org.apache.flink.runtime.checkpoint.CheckpointMetricsBuilder;
 import org.apache.flink.runtime.checkpoint.channel.InputChannelInfo;
-import org.apache.flink.runtime.concurrent.FutureUtils;
 import org.apache.flink.runtime.io.network.api.CancelCheckpointMarker;
 import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.util.clock.Clock;
+import org.apache.flink.util.concurrent.FutureUtils;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -44,6 +45,8 @@ public abstract class CheckpointBarrierHandler implements Closeable {
 
     /** The listener to be notified on complete checkpoints. */
     private final AbstractInvokable toNotifyOnCheckpoint;
+
+    private final Clock clock;
 
     /** The time (in nanoseconds) that the latest alignment took. */
     private CompletableFuture<Long> latestAlignmentDurationNanos = new CompletableFuture<>();
@@ -65,8 +68,19 @@ public abstract class CheckpointBarrierHandler implements Closeable {
 
     private CompletableFuture<Long> latestBytesProcessedDuringAlignment = new CompletableFuture<>();
 
-    public CheckpointBarrierHandler(AbstractInvokable toNotifyOnCheckpoint) {
+    /**
+     * TODO Whether enables checkpoints after tasks finished. This is a temporary flag and will be
+     * removed in the last PR.
+     */
+    protected boolean enableCheckpointAfterTasksFinished;
+
+    public CheckpointBarrierHandler(AbstractInvokable toNotifyOnCheckpoint, Clock clock) {
         this.toNotifyOnCheckpoint = checkNotNull(toNotifyOnCheckpoint);
+        this.clock = checkNotNull(clock);
+    }
+
+    public void setEnableCheckpointAfterTasksFinished(boolean enableCheckpointAfterTasksFinished) {
+        this.enableCheckpointAfterTasksFinished = enableCheckpointAfterTasksFinished;
     }
 
     @Override
@@ -79,16 +93,16 @@ public abstract class CheckpointBarrierHandler implements Closeable {
             CheckpointBarrier announcedBarrier, int sequenceNumber, InputChannelInfo channelInfo)
             throws IOException;
 
-    public abstract void processCancellationBarrier(CancelCheckpointMarker cancelBarrier)
-            throws IOException;
+    public abstract void processCancellationBarrier(
+            CancelCheckpointMarker cancelBarrier, InputChannelInfo channelInfo) throws IOException;
 
-    public abstract void processEndOfPartition() throws IOException;
+    public abstract void processEndOfPartition(InputChannelInfo channelInfo) throws IOException;
 
     public abstract long getLatestCheckpointId();
 
     public long getAlignmentDurationNanos() {
         if (isDuringAlignment()) {
-            return System.nanoTime() - startOfAlignmentTimestamp;
+            return clock.relativeTimeNanos() - startOfAlignmentTimestamp;
         } else {
             return FutureUtils.getOrDefault(latestAlignmentDurationNanos, 0L);
         }
@@ -104,7 +118,10 @@ public abstract class CheckpointBarrierHandler implements Closeable {
 
     protected void notifyCheckpoint(CheckpointBarrier checkpointBarrier) throws IOException {
         CheckpointMetaData checkpointMetaData =
-                new CheckpointMetaData(checkpointBarrier.getId(), checkpointBarrier.getTimestamp());
+                new CheckpointMetaData(
+                        checkpointBarrier.getId(),
+                        checkpointBarrier.getTimestamp(),
+                        System.currentTimeMillis());
 
         CheckpointMetricsBuilder checkpointMetrics =
                 new CheckpointMetricsBuilder()
@@ -135,14 +152,14 @@ public abstract class CheckpointBarrierHandler implements Closeable {
 
     protected void markAlignmentStart(long checkpointCreationTimestamp) {
         latestCheckpointStartDelayNanos =
-                1_000_000 * Math.max(0, System.currentTimeMillis() - checkpointCreationTimestamp);
+                1_000_000 * Math.max(0, clock.absoluteTimeMillis() - checkpointCreationTimestamp);
 
         resetAlignment();
-        startOfAlignmentTimestamp = System.nanoTime();
+        startOfAlignmentTimestamp = clock.relativeTimeNanos();
     }
 
     protected void markAlignmentEnd() {
-        markAlignmentEnd(System.nanoTime() - startOfAlignmentTimestamp);
+        markAlignmentEnd(clock.relativeTimeNanos() - startOfAlignmentTimestamp);
     }
 
     protected void markAlignmentEnd(long alignmentDuration) {
@@ -169,5 +186,14 @@ public abstract class CheckpointBarrierHandler implements Closeable {
 
     private boolean isDuringAlignment() {
         return startOfAlignmentTimestamp > OUTSIDE_OF_ALIGNMENT;
+    }
+
+    protected final Clock getClock() {
+        return clock;
+    }
+
+    /** A handle to a delayed action which can be cancelled. */
+    interface Cancellable {
+        void cancel();
     }
 }

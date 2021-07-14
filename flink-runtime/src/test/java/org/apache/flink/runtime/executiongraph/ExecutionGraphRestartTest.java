@@ -31,6 +31,8 @@ import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.executiongraph.failover.flip1.TestRestartBackoffTimeStrategy;
 import org.apache.flink.runtime.executiongraph.utils.SimpleAckingTaskManagerGateway;
 import org.apache.flink.runtime.jobgraph.JobGraph;
+import org.apache.flink.runtime.jobgraph.JobGraphBuilder;
+import org.apache.flink.runtime.jobgraph.JobGraphTestUtils;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobmanager.slots.TaskManagerGateway;
 import org.apache.flink.runtime.jobmaster.JobMasterId;
@@ -97,6 +99,62 @@ public class ExecutionGraphRestartTest extends TestLogger {
 
     private SlotPoolImpl createSlotPoolImpl() {
         return new TestingSlotPoolImpl(TEST_JOB_ID);
+    }
+
+    @Test
+    public void testCancelAllPendingRequestWhileCanceling() throws Exception {
+        try (SlotPoolImpl slotPool = createSlotPoolImpl()) {
+
+            TaskManagerLocation taskManagerLocation = new LocalTaskManagerLocation();
+            final int NUM_TASKS_EXCEED_SLOT_POOL = 50;
+            // create a graph with task count larger than slot pool
+            JobVertex sender =
+                    ExecutionGraphTestUtils.createJobVertex(
+                            "Task", NUM_TASKS + NUM_TASKS_EXCEED_SLOT_POOL, NoOpInvokable.class);
+            JobGraph graph = JobGraphTestUtils.streamingJobGraph(sender);
+            SchedulerBase scheduler =
+                    SchedulerTestingUtils.newSchedulerBuilder(graph, mainThreadExecutor)
+                            .setExecutionSlotAllocatorFactory(
+                                    createExecutionSlotAllocatorFactory(
+                                            slotPool, taskManagerLocation))
+                            .build();
+            ExecutionGraph executionGraph = scheduler.getExecutionGraph();
+
+            startScheduling(scheduler);
+            assertEquals(NUM_TASKS_EXCEED_SLOT_POOL, slotPool.getPendingRequests().size());
+
+            scheduler.cancel();
+            assertEquals(JobStatus.CANCELLING, executionGraph.getState());
+            assertEquals(0, slotPool.getPendingRequests().size());
+        }
+    }
+
+    @Test
+    public void testCancelAllPendingRequestWhileFailing() throws Exception {
+        try (SlotPoolImpl slotPool = createSlotPoolImpl()) {
+
+            TaskManagerLocation taskManagerLocation = new LocalTaskManagerLocation();
+            final int NUM_TASKS_EXCEED_SLOT_POOL = 50;
+            // create a graph with task count larger than slot pool
+            JobVertex sender =
+                    ExecutionGraphTestUtils.createJobVertex(
+                            "Task", NUM_TASKS + NUM_TASKS_EXCEED_SLOT_POOL, NoOpInvokable.class);
+            JobGraph graph = JobGraphTestUtils.streamingJobGraph(sender);
+            SchedulerBase scheduler =
+                    SchedulerTestingUtils.newSchedulerBuilder(graph, mainThreadExecutor)
+                            .setExecutionSlotAllocatorFactory(
+                                    createExecutionSlotAllocatorFactory(
+                                            slotPool, taskManagerLocation))
+                            .build();
+            ExecutionGraph executionGraph = scheduler.getExecutionGraph();
+
+            startScheduling(scheduler);
+            assertEquals(NUM_TASKS_EXCEED_SLOT_POOL, slotPool.getPendingRequests().size());
+
+            scheduler.handleGlobalFailure(new Exception("test"));
+            assertEquals(JobStatus.FAILING, executionGraph.getState());
+            assertEquals(0, slotPool.getPendingRequests().size());
+        }
     }
 
     @Test
@@ -215,7 +273,7 @@ public class ExecutionGraphRestartTest extends TestLogger {
         JobVertex sender = ExecutionGraphTestUtils.createJobVertex("Task1", 1, NoOpInvokable.class);
         JobVertex receiver =
                 ExecutionGraphTestUtils.createJobVertex("Task2", 1, NoOpInvokable.class);
-        JobGraph jobGraph = new JobGraph("Pointwise job", sender, receiver);
+        JobGraph jobGraph = JobGraphTestUtils.streamingJobGraph(sender, receiver);
 
         try (SlotPool slotPool = createSlotPoolImpl()) {
             SchedulerBase scheduler =
@@ -250,6 +308,7 @@ public class ExecutionGraphRestartTest extends TestLogger {
                 assertNotNull(
                         "No assigned resource (test instability).",
                         vertex.getCurrentAssignedResource());
+                vertex.getCurrentExecutionAttempt().switchToRecovering();
                 vertex.getCurrentExecutionAttempt().switchToRunning();
             }
 
@@ -359,7 +418,7 @@ public class ExecutionGraphRestartTest extends TestLogger {
     private static JobGraph createJobGraph() {
         JobVertex sender =
                 ExecutionGraphTestUtils.createJobVertex("Task", NUM_TASKS, NoOpInvokable.class);
-        return new JobGraph("Pointwise job", sender);
+        return JobGraphTestUtils.streamingJobGraph(sender);
     }
 
     private static JobGraph createJobGraphToCancel() throws IOException {
@@ -368,8 +427,10 @@ public class ExecutionGraphRestartTest extends TestLogger {
         ExecutionConfig executionConfig = new ExecutionConfig();
         executionConfig.setRestartStrategy(
                 RestartStrategies.fixedDelayRestart(Integer.MAX_VALUE, Integer.MAX_VALUE));
-        JobGraph jobGraph = new JobGraph("Test Job", vertex);
-        jobGraph.setExecutionConfig(executionConfig);
-        return jobGraph;
+
+        return JobGraphBuilder.newStreamingJobGraphBuilder()
+                .addJobVertex(vertex)
+                .setExecutionConfig(executionConfig)
+                .build();
     }
 }
