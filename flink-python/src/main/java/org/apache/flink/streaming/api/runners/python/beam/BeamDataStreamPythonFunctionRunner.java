@@ -34,63 +34,87 @@ import javax.annotation.Nullable;
 
 import java.util.Map;
 
+import static org.apache.flink.python.Constants.FLINK_CODER_URN;
+
 /**
- * {@link BeamDataStreamPythonFunctionRunner} is responsible for starting a beam python harness to execute user
- * defined python function.
+ * {@link BeamDataStreamPythonFunctionRunner} is responsible for starting a beam python harness to
+ * execute user defined python function.
  */
 @Internal
 public class BeamDataStreamPythonFunctionRunner extends BeamPythonFunctionRunner {
 
-	private final TypeInformation inputType;
-	private final TypeInformation outputTupe;
-	private final FlinkFnApi.UserDefinedDataStreamFunction userDefinedDataStreamFunction;
-	private final String coderUrn;
+    private final TypeInformation inputType;
+    private final TypeInformation outputType;
+    private final FlinkFnApi.UserDefinedDataStreamFunction userDefinedDataStreamFunction;
 
-	public BeamDataStreamPythonFunctionRunner(
-		String taskName,
-		PythonEnvironmentManager environmentManager,
-		TypeInformation inputType,
-		TypeInformation outputType,
-		String functionUrn,
-		FlinkFnApi.UserDefinedDataStreamFunction userDefinedDataStreamFunction,
-		String coderUrn,
-		Map<String, String> jobOptions,
-		@Nullable FlinkMetricContainer flinkMetricContainer,
-		KeyedStateBackend stateBackend,
-		TypeSerializer keySerializer,
-		MemoryManager memoryManager,
-		double managedMemoryFraction) {
-		super(taskName, environmentManager, functionUrn, jobOptions, flinkMetricContainer, stateBackend, keySerializer, memoryManager, managedMemoryFraction);
-		this.inputType = inputType;
-		this.outputTupe = outputType;
-		this.userDefinedDataStreamFunction = userDefinedDataStreamFunction;
-		this.coderUrn = coderUrn;
-	}
+    public BeamDataStreamPythonFunctionRunner(
+            String taskName,
+            PythonEnvironmentManager environmentManager,
+            TypeInformation inputType,
+            TypeInformation outputType,
+            String functionUrn,
+            FlinkFnApi.UserDefinedDataStreamFunction userDefinedDataStreamFunction,
+            Map<String, String> jobOptions,
+            @Nullable FlinkMetricContainer flinkMetricContainer,
+            KeyedStateBackend stateBackend,
+            TypeSerializer keySerializer,
+            TypeSerializer namespaceSerializer,
+            MemoryManager memoryManager,
+            double managedMemoryFraction,
+            FlinkFnApi.CoderParam.DataType inputDataType,
+            FlinkFnApi.CoderParam.DataType outputDataType,
+            FlinkFnApi.CoderParam.OutputMode outputMode) {
+        super(
+                taskName,
+                environmentManager,
+                functionUrn,
+                jobOptions,
+                flinkMetricContainer,
+                stateBackend,
+                keySerializer,
+                namespaceSerializer,
+                memoryManager,
+                managedMemoryFraction,
+                inputDataType,
+                outputDataType,
+                outputMode);
+        this.inputType = inputType;
+        this.outputType = outputType;
+        this.userDefinedDataStreamFunction = userDefinedDataStreamFunction;
+    }
 
-	@Override
-	protected byte[] getUserDefinedFunctionsProtoBytes() {
-		return this.userDefinedDataStreamFunction.toByteArray();
-	}
+    @Override
+    protected byte[] getUserDefinedFunctionsProtoBytes() {
+        return this.userDefinedDataStreamFunction.toByteArray();
+    }
 
-	@Override
-	protected RunnerApi.Coder getInputCoderProto() {
-		return getInputOutputCoderProto(inputType);
-	}
+    @Override
+    protected RunnerApi.Coder getInputCoderProto() {
+        return getInputOutputCoderProto(inputType, inputDataType);
+    }
 
-	@Override
-	protected RunnerApi.Coder getOutputCoderProto() {
-		return getInputOutputCoderProto(outputTupe);
-	}
+    @Override
+    protected RunnerApi.Coder getOutputCoderProto() {
+        return getInputOutputCoderProto(outputType, outputDataType);
+    }
 
-	private RunnerApi.Coder getInputOutputCoderProto(TypeInformation typeInformation) {
-		FlinkFnApi.TypeInfo.FieldType builtFieldType = PythonTypeUtils.TypeInfoToProtoConverter
-			.getFieldType(typeInformation);
-		return RunnerApi.Coder.newBuilder()
-			.setSpec(RunnerApi.FunctionSpec.newBuilder()
-						.setUrn(this.coderUrn)
-						.setPayload(org.apache.beam.vendor.grpc.v1p26p0.com.google.protobuf.ByteString.copyFrom(
-							PythonTypeUtils.TypeInfoToProtoConverter.toTypeInfoProto(builtFieldType).toByteArray()
-						)).build()
-			).build();
-	}
+    private RunnerApi.Coder getInputOutputCoderProto(
+            TypeInformation typeInformation, FlinkFnApi.CoderParam.DataType dataType) {
+        FlinkFnApi.CoderParam.Builder coderParamBuilder = FlinkFnApi.CoderParam.newBuilder();
+        FlinkFnApi.TypeInfo typeinfo =
+                PythonTypeUtils.TypeInfoToProtoConverter.toTypeInfoProto(typeInformation);
+        coderParamBuilder.setTypeInfo(typeinfo);
+        coderParamBuilder.setDataType(dataType);
+        coderParamBuilder.setOutputMode(outputMode);
+        return RunnerApi.Coder.newBuilder()
+                .setSpec(
+                        RunnerApi.FunctionSpec.newBuilder()
+                                .setUrn(FLINK_CODER_URN)
+                                .setPayload(
+                                        org.apache.beam.vendor.grpc.v1p26p0.com.google.protobuf
+                                                .ByteString.copyFrom(
+                                                coderParamBuilder.build().toByteArray()))
+                                .build())
+                .build();
+    }
 }

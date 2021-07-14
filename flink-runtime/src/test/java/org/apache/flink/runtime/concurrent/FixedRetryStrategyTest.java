@@ -19,6 +19,8 @@
 package org.apache.flink.runtime.concurrent;
 
 import org.apache.flink.util.TestLogger;
+import org.apache.flink.util.concurrent.FixedRetryStrategy;
+import org.apache.flink.util.concurrent.RetryStrategy;
 
 import org.junit.Test;
 
@@ -26,27 +28,23 @@ import java.time.Duration;
 
 import static org.junit.Assert.assertEquals;
 
-/**
- * Tests for {@link FixedRetryStrategy}.
- */
+/** Tests for {@link FixedRetryStrategy}. */
 public class FixedRetryStrategyTest extends TestLogger {
 
-	@Test
-	public void testGetters() throws Exception {
-		RetryStrategy retryStrategy = new FixedRetryStrategy(10, Duration.ofMillis(5L));
-		assertEquals(10, retryStrategy.getNumRemainingRetries());
-		assertEquals(Duration.ofMillis(5L), retryStrategy.getRetryDelay());
+    @Test
+    public void testGetters() throws Exception {
+        RetryStrategy retryStrategy = new FixedRetryStrategy(10, Duration.ofMillis(5L));
+        assertEquals(10, retryStrategy.getNumRemainingRetries());
+        assertEquals(Duration.ofMillis(5L), retryStrategy.getRetryDelay());
 
-		RetryStrategy nextRetryStrategy = retryStrategy.getNextRetryStrategy();
-		assertEquals(9, nextRetryStrategy.getNumRemainingRetries());
-		assertEquals(Duration.ofMillis(5L), nextRetryStrategy.getRetryDelay());
-	}
+        RetryStrategy nextRetryStrategy = retryStrategy.getNextRetryStrategy();
+        assertEquals(9, nextRetryStrategy.getNumRemainingRetries());
+        assertEquals(Duration.ofMillis(5L), nextRetryStrategy.getRetryDelay());
+    }
 
-	/**
-	 * Tests that getting a next RetryStrategy below zero remaining retries fails.
-	 */
-	@Test(expected = IllegalStateException.class)
-	public void testRetryFailure() throws Throwable {
-		new FixedRetryStrategy(0, Duration.ofMillis(5L)).getNextRetryStrategy();
-	}
+    /** Tests that getting a next RetryStrategy below zero remaining retries fails. */
+    @Test(expected = IllegalStateException.class)
+    public void testRetryFailure() throws Throwable {
+        new FixedRetryStrategy(0, Duration.ofMillis(5L)).getNextRetryStrategy();
+    }
 }

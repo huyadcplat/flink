@@ -23,7 +23,7 @@ import org.apache.flink.fnexecution.v1.FlinkFnApi;
 import org.apache.flink.python.env.PythonEnvironmentManager;
 import org.apache.flink.python.metric.FlinkMetricContainer;
 import org.apache.flink.runtime.state.KeyedStateBackend;
-import org.apache.flink.table.runtime.runners.python.beam.BeamTableStatefulPythonFunctionRunner;
+import org.apache.flink.table.runtime.runners.python.beam.BeamTablePythonFunctionRunner;
 import org.apache.flink.table.types.logical.RowType;
 
 import org.apache.beam.runners.fnexecution.control.JobBundleFactory;
@@ -35,49 +35,64 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * A {@link PassThroughStreamAggregatePythonFunctionRunner} runner that help to test the Python stream group
- * aggregate operators. It will process the input data with the provided `processFunction`.
+ * A {@link PassThroughStreamAggregatePythonFunctionRunner} runner that help to test the Python
+ * stream group aggregate operators. It will process the input data with the provided
+ * `processFunction`.
  */
-public class PassThroughStreamAggregatePythonFunctionRunner extends BeamTableStatefulPythonFunctionRunner {
+public class PassThroughStreamAggregatePythonFunctionRunner extends BeamTablePythonFunctionRunner {
 
-	private final List<byte[]> buffer;
+    private final List<byte[]> buffer;
 
-	private final Function<byte[], byte[]> processFunction;
+    private final Function<byte[], byte[]> processFunction;
 
-	public PassThroughStreamAggregatePythonFunctionRunner(
-			String taskName,
-			PythonEnvironmentManager environmentManager,
-			RowType inputType,
-			RowType outputType,
-			String functionUrn,
-			FlinkFnApi.UserDefinedAggregateFunctions userDefinedFunctions,
-			String coderUrn,
-			Map<String, String> jobOptions,
-			FlinkMetricContainer flinkMetricContainer,
-			KeyedStateBackend keyedStateBackend,
-			TypeSerializer keySerializer,
-			Function<byte[], byte[]> processFunction) {
-		super(taskName, environmentManager, inputType, outputType, functionUrn, userDefinedFunctions,
-			coderUrn, jobOptions, flinkMetricContainer, keyedStateBackend, keySerializer, null, 0.0);
-		this.buffer = new LinkedList<>();
-		this.processFunction = processFunction;
-	}
+    public PassThroughStreamAggregatePythonFunctionRunner(
+            String taskName,
+            PythonEnvironmentManager environmentManager,
+            RowType inputType,
+            RowType outputType,
+            String functionUrn,
+            FlinkFnApi.UserDefinedAggregateFunctions userDefinedFunctions,
+            Map<String, String> jobOptions,
+            FlinkMetricContainer flinkMetricContainer,
+            KeyedStateBackend keyedStateBackend,
+            TypeSerializer keySerializer,
+            Function<byte[], byte[]> processFunction) {
+        super(
+                taskName,
+                environmentManager,
+                inputType,
+                outputType,
+                functionUrn,
+                userDefinedFunctions,
+                jobOptions,
+                flinkMetricContainer,
+                keyedStateBackend,
+                keySerializer,
+                null,
+                null,
+                0.0,
+                FlinkFnApi.CoderParam.DataType.ROW,
+                FlinkFnApi.CoderParam.DataType.ROW,
+                FlinkFnApi.CoderParam.OutputMode.MULTIPLE);
+        this.buffer = new LinkedList<>();
+        this.processFunction = processFunction;
+    }
 
-	@Override
-	protected void startBundle() {
-		super.startBundle();
-		this.mainInputReceiver = input -> buffer.add(processFunction.apply(input.getValue()));
-	}
+    @Override
+    protected void startBundle() {
+        super.startBundle();
+        this.mainInputReceiver = input -> buffer.add(processFunction.apply(input.getValue()));
+    }
 
-	@Override
-	public void flush() throws Exception {
-		super.flush();
-		resultBuffer.addAll(buffer);
-		buffer.clear();
-	}
+    @Override
+    public void flush() throws Exception {
+        super.flush();
+        resultBuffer.addAll(buffer);
+        buffer.clear();
+    }
 
-	@Override
-	public JobBundleFactory createJobBundleFactory(Struct pipelineOptions) {
-		return PythonTestUtils.createMockJobBundleFactory();
-	}
+    @Override
+    public JobBundleFactory createJobBundleFactory(Struct pipelineOptions) {
+        return PythonTestUtils.createMockJobBundleFactory();
+    }
 }

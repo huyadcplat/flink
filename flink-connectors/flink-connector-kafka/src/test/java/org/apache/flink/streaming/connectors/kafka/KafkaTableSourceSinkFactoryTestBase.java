@@ -36,16 +36,12 @@ import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkFixedPartiti
 import org.apache.flink.streaming.connectors.kafka.partitioner.FlinkKafkaPartitioner;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.TableSchema;
-import org.apache.flink.table.descriptors.Kafka;
-import org.apache.flink.table.descriptors.Rowtime;
-import org.apache.flink.table.descriptors.Schema;
-import org.apache.flink.table.descriptors.TestTableDescriptor;
+import org.apache.flink.table.factories.DeserializationSchemaFactory;
+import org.apache.flink.table.factories.SerializationSchemaFactory;
 import org.apache.flink.table.factories.StreamTableSinkFactory;
 import org.apache.flink.table.factories.StreamTableSourceFactory;
 import org.apache.flink.table.factories.TableFactoryService;
-import org.apache.flink.table.factories.utils.TestDeserializationSchema;
-import org.apache.flink.table.factories.utils.TestSerializationSchema;
-import org.apache.flink.table.factories.utils.TestTableFormat;
+import org.apache.flink.table.factories.TableFormatFactoryBase;
 import org.apache.flink.table.sinks.TableSink;
 import org.apache.flink.table.sources.RowtimeAttributeDescriptor;
 import org.apache.flink.table.sources.TableSource;
@@ -58,10 +54,13 @@ import org.apache.flink.util.TestLogger;
 
 import org.junit.Test;
 
+import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
 
@@ -69,402 +68,555 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-/**
- * Abstract test base for {@link KafkaTableSourceSinkFactoryBase}.
- */
+/** Abstract test base for {@link KafkaTableSourceSinkFactoryBase}. */
 public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 
-	private static final String TOPIC = "myTopic";
-	private static final int PARTITION_0 = 0;
-	private static final long OFFSET_0 = 100L;
-	private static final int PARTITION_1 = 1;
-	private static final long OFFSET_1 = 123L;
-	private static final String FRUIT_NAME = "fruit-name";
-	private static final String NAME = "name";
-	private static final String COUNT = "count";
-	private static final String TIME = "time";
-	private static final String EVENT_TIME = "event-time";
-	private static final String PROC_TIME = "proc-time";
-	private static final String WATERMARK_EXPRESSION = EVENT_TIME + " - INTERVAL '5' SECOND";
-	private static final DataType WATERMARK_DATATYPE = DataTypes.TIMESTAMP(3);
-	private static final String COMPUTED_COLUMN_NAME = "computed-column";
-	private static final String COMPUTED_COLUMN_EXPRESSION = COUNT + " + 1.0";
-	private static final DataType COMPUTED_COLUMN_DATATYPE = DataTypes.DECIMAL(10, 3);
+    private static final String TOPIC = "myTopic";
+    private static final int PARTITION_0 = 0;
+    private static final long OFFSET_0 = 100L;
+    private static final int PARTITION_1 = 1;
+    private static final long OFFSET_1 = 123L;
+    private static final String FRUIT_NAME = "fruit-name";
+    private static final String NAME = "name";
+    private static final String COUNT = "count";
+    private static final String TIME = "time";
+    private static final String EVENT_TIME = "event-time";
+    private static final String PROC_TIME = "proc-time";
+    private static final String WATERMARK_EXPRESSION = EVENT_TIME + " - INTERVAL '5' SECOND";
+    private static final DataType WATERMARK_DATATYPE = DataTypes.TIMESTAMP(3);
+    private static final String COMPUTED_COLUMN_NAME = "computed-column";
+    private static final String COMPUTED_COLUMN_EXPRESSION = COUNT + " + 1.0";
+    private static final DataType COMPUTED_COLUMN_DATATYPE = DataTypes.DECIMAL(10, 3);
 
-	private static final Properties KAFKA_PROPERTIES = new Properties();
-	static {
-		KAFKA_PROPERTIES.setProperty("group.id", "dummy");
-		KAFKA_PROPERTIES.setProperty("bootstrap.servers", "dummy");
-	}
+    private static final Properties KAFKA_PROPERTIES = new Properties();
 
-	private static final Map<Integer, Long> OFFSETS = new HashMap<>();
-	static {
-		OFFSETS.put(PARTITION_0, OFFSET_0);
-		OFFSETS.put(PARTITION_1, OFFSET_1);
-	}
+    static {
+        KAFKA_PROPERTIES.setProperty("group.id", "dummy");
+        KAFKA_PROPERTIES.setProperty("bootstrap.servers", "dummy");
+    }
 
-	@Test
-	@SuppressWarnings("unchecked")
-	public void testTableSource() {
-		// prepare parameters for Kafka table source
-		final TableSchema schema = TableSchema.builder()
-			.field(FRUIT_NAME, DataTypes.STRING())
-			.field(COUNT, DataTypes.DECIMAL(38, 18))
-			.field(EVENT_TIME, DataTypes.TIMESTAMP(3))
-			.field(PROC_TIME, DataTypes.TIMESTAMP(3))
-			.build();
+    private static final Map<Integer, Long> OFFSETS = new HashMap<>();
 
-		final List<RowtimeAttributeDescriptor> rowtimeAttributeDescriptors = Collections.singletonList(
-			new RowtimeAttributeDescriptor(EVENT_TIME, new ExistingField(TIME), new AscendingTimestamps()));
+    static {
+        OFFSETS.put(PARTITION_0, OFFSET_0);
+        OFFSETS.put(PARTITION_1, OFFSET_1);
+    }
 
-		final Map<String, String> fieldMapping = new HashMap<>();
-		fieldMapping.put(FRUIT_NAME, NAME);
-		fieldMapping.put(NAME, NAME);
-		fieldMapping.put(COUNT, COUNT);
-		fieldMapping.put(TIME, TIME);
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testTableSource() {
+        // prepare parameters for Kafka table source
+        final TableSchema schema =
+                TableSchema.builder()
+                        .field(FRUIT_NAME, DataTypes.STRING())
+                        .field(COUNT, DataTypes.DECIMAL(38, 18))
+                        .field(EVENT_TIME, DataTypes.TIMESTAMP(3))
+                        .field(PROC_TIME, DataTypes.TIMESTAMP(3))
+                        .build();
 
-		final Map<KafkaTopicPartition, Long> specificOffsets = new HashMap<>();
-		specificOffsets.put(new KafkaTopicPartition(TOPIC, PARTITION_0), OFFSET_0);
-		specificOffsets.put(new KafkaTopicPartition(TOPIC, PARTITION_1), OFFSET_1);
+        final List<RowtimeAttributeDescriptor> rowtimeAttributeDescriptors =
+                Collections.singletonList(
+                        new RowtimeAttributeDescriptor(
+                                EVENT_TIME, new ExistingField(TIME), new AscendingTimestamps()));
 
-		final TestDeserializationSchema deserializationSchema = new TestDeserializationSchema(
-			TableSchema.builder()
-				.field(NAME, DataTypes.STRING())
-				.field(COUNT, DataTypes.DECIMAL(38, 18))
-				.field(TIME, DataTypes.TIMESTAMP(3))
-				.build().toRowType()
-		);
+        final Map<String, String> fieldMapping = new HashMap<>();
+        fieldMapping.put(FRUIT_NAME, NAME);
+        fieldMapping.put(NAME, NAME);
+        fieldMapping.put(COUNT, COUNT);
+        fieldMapping.put(TIME, TIME);
 
-		final KafkaTableSourceBase expected = getExpectedKafkaTableSource(
-			schema,
-			Optional.of(PROC_TIME),
-			rowtimeAttributeDescriptors,
-			fieldMapping,
-			TOPIC,
-			KAFKA_PROPERTIES,
-			deserializationSchema,
-			StartupMode.SPECIFIC_OFFSETS,
-			specificOffsets,
-			0L);
+        final Map<KafkaTopicPartition, Long> specificOffsets = new HashMap<>();
+        specificOffsets.put(new KafkaTopicPartition(TOPIC, PARTITION_0), OFFSET_0);
+        specificOffsets.put(new KafkaTopicPartition(TOPIC, PARTITION_1), OFFSET_1);
 
-		TableSourceValidation.validateTableSource(expected, schema);
+        final DeserializationSchemaMock deserializationSchema =
+                new DeserializationSchemaMock(
+                        TableSchema.builder()
+                                .field(NAME, DataTypes.STRING())
+                                .field(COUNT, DataTypes.DECIMAL(38, 18))
+                                .field(TIME, DataTypes.TIMESTAMP(3))
+                                .build()
+                                .toRowType());
 
-		// construct table source using descriptors and table source factory
-		final Map<String, String> propertiesMap = new HashMap<>();
-		propertiesMap.putAll(createKafkaSourceProperties());
-		propertiesMap.put("schema.watermark.0.rowtime", EVENT_TIME);
-		propertiesMap.put("schema.watermark.0.strategy.expr", WATERMARK_EXPRESSION);
-		propertiesMap.put("schema.watermark.0.strategy.data-type", WATERMARK_DATATYPE.toString());
-		propertiesMap.put("schema.4.name", COMPUTED_COLUMN_NAME);
-		propertiesMap.put("schema.4.data-type", COMPUTED_COLUMN_DATATYPE.toString());
-		propertiesMap.put("schema.4.expr", COMPUTED_COLUMN_EXPRESSION);
+        final KafkaTableSourceBase expected =
+                getExpectedKafkaTableSource(
+                        schema,
+                        Optional.of(PROC_TIME),
+                        rowtimeAttributeDescriptors,
+                        fieldMapping,
+                        TOPIC,
+                        KAFKA_PROPERTIES,
+                        deserializationSchema,
+                        StartupMode.SPECIFIC_OFFSETS,
+                        specificOffsets,
+                        0L);
 
-		final TableSource<?> actualSource = TableFactoryService.find(StreamTableSourceFactory.class, propertiesMap)
-			.createStreamTableSource(propertiesMap);
+        TableSourceValidation.validateTableSource(expected, schema);
 
-		assertEquals(expected, actualSource);
+        // construct table source using descriptors and table source factory
+        final Map<String, String> propertiesMap = new HashMap<>();
+        propertiesMap.putAll(createKafkaSourceProperties());
+        propertiesMap.put("schema.watermark.0.rowtime", EVENT_TIME);
+        propertiesMap.put("schema.watermark.0.strategy.expr", WATERMARK_EXPRESSION);
+        propertiesMap.put("schema.watermark.0.strategy.data-type", WATERMARK_DATATYPE.toString());
+        propertiesMap.put("schema.4.name", COMPUTED_COLUMN_NAME);
+        propertiesMap.put("schema.4.data-type", COMPUTED_COLUMN_DATATYPE.toString());
+        propertiesMap.put("schema.4.expr", COMPUTED_COLUMN_EXPRESSION);
 
-		// test Kafka consumer
-		final KafkaTableSourceBase actualKafkaSource = (KafkaTableSourceBase) actualSource;
-		final StreamExecutionEnvironmentMock mock = new StreamExecutionEnvironmentMock();
-		actualKafkaSource.getDataStream(mock);
-		assertTrue(getExpectedFlinkKafkaConsumer().isAssignableFrom(mock.sourceFunction.getClass()));
-		// Test commitOnCheckpoints flag should be true when set consumer group.
-		assertTrue(((FlinkKafkaConsumerBase) mock.sourceFunction).getEnableCommitOnCheckpoints());
-	}
+        final TableSource<?> actualSource =
+                TableFactoryService.find(StreamTableSourceFactory.class, propertiesMap)
+                        .createStreamTableSource(propertiesMap);
 
-	@Test
-	public void testTableSourceCommitOnCheckpointsDisabled() {
-		Map<String, String> propertiesMap = new HashMap<>();
-		createKafkaSourceProperties().forEach((k, v) -> {
-			if (!k.equals("connector.properties.group.id")) {
-				propertiesMap.put(k, v);
-			}
-		});
-		final TableSource<?> tableSource = TableFactoryService.find(StreamTableSourceFactory.class, propertiesMap)
-			.createStreamTableSource(propertiesMap);
-		final StreamExecutionEnvironmentMock mock = new StreamExecutionEnvironmentMock();
-		// Test commitOnCheckpoints flag should be false when do not set consumer group.
-		((KafkaTableSourceBase) tableSource).getDataStream(mock);
-		assertTrue(mock.sourceFunction instanceof FlinkKafkaConsumerBase);
-		assertFalse(((FlinkKafkaConsumerBase) mock.sourceFunction).getEnableCommitOnCheckpoints());
-	}
+        assertEquals(expected, actualSource);
 
-	@Test
-	@SuppressWarnings("unchecked")
-	public void testTableSourceWithLegacyProperties() {
-		// prepare parameters for Kafka table source
-		final TableSchema schema = TableSchema.builder()
-			.field(FRUIT_NAME, DataTypes.STRING())
-			.field(COUNT, DataTypes.DECIMAL(38, 18))
-			.field(EVENT_TIME, DataTypes.TIMESTAMP(3))
-			.field(PROC_TIME, DataTypes.TIMESTAMP(3))
-			.build();
+        // test Kafka consumer
+        final KafkaTableSourceBase actualKafkaSource = (KafkaTableSourceBase) actualSource;
+        final StreamExecutionEnvironmentMock mock = new StreamExecutionEnvironmentMock();
+        actualKafkaSource.getDataStream(mock);
+        assertTrue(
+                getExpectedFlinkKafkaConsumer().isAssignableFrom(mock.sourceFunction.getClass()));
+        // Test commitOnCheckpoints flag should be true when set consumer group.
+        assertTrue(((FlinkKafkaConsumerBase) mock.sourceFunction).getEnableCommitOnCheckpoints());
+    }
 
-		final List<RowtimeAttributeDescriptor> rowtimeAttributeDescriptors = Collections.singletonList(
-			new RowtimeAttributeDescriptor(EVENT_TIME, new ExistingField(TIME), new AscendingTimestamps()));
+    @Test
+    public void testTableSourceCommitOnCheckpointsDisabled() {
+        Map<String, String> propertiesMap = new HashMap<>();
+        createKafkaSourceProperties()
+                .forEach(
+                        (k, v) -> {
+                            if (!k.equals("connector.properties.group.id")) {
+                                propertiesMap.put(k, v);
+                            }
+                        });
+        final TableSource<?> tableSource =
+                TableFactoryService.find(StreamTableSourceFactory.class, propertiesMap)
+                        .createStreamTableSource(propertiesMap);
+        final StreamExecutionEnvironmentMock mock = new StreamExecutionEnvironmentMock();
+        // Test commitOnCheckpoints flag should be false when do not set consumer group.
+        ((KafkaTableSourceBase) tableSource).getDataStream(mock);
+        assertTrue(mock.sourceFunction instanceof FlinkKafkaConsumerBase);
+        assertFalse(((FlinkKafkaConsumerBase) mock.sourceFunction).getEnableCommitOnCheckpoints());
+    }
 
-		final Map<String, String> fieldMapping = new HashMap<>();
-		fieldMapping.put(FRUIT_NAME, NAME);
-		fieldMapping.put(NAME, NAME);
-		fieldMapping.put(COUNT, COUNT);
-		fieldMapping.put(TIME, TIME);
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testTableSourceWithLegacyProperties() {
+        // prepare parameters for Kafka table source
+        final TableSchema schema =
+                TableSchema.builder()
+                        .field(FRUIT_NAME, DataTypes.STRING())
+                        .field(COUNT, DataTypes.DECIMAL(38, 18))
+                        .field(EVENT_TIME, DataTypes.TIMESTAMP(3))
+                        .field(PROC_TIME, DataTypes.TIMESTAMP(3))
+                        .build();
 
-		final Map<KafkaTopicPartition, Long> specificOffsets = new HashMap<>();
-		specificOffsets.put(new KafkaTopicPartition(TOPIC, PARTITION_0), OFFSET_0);
-		specificOffsets.put(new KafkaTopicPartition(TOPIC, PARTITION_1), OFFSET_1);
+        final List<RowtimeAttributeDescriptor> rowtimeAttributeDescriptors =
+                Collections.singletonList(
+                        new RowtimeAttributeDescriptor(
+                                EVENT_TIME, new ExistingField(TIME), new AscendingTimestamps()));
 
-		final TestDeserializationSchema deserializationSchema = new TestDeserializationSchema(
-			TableSchema.builder()
-				.field(NAME, DataTypes.STRING())
-				.field(COUNT, DataTypes.DECIMAL(38, 18))
-				.field(TIME, DataTypes.TIMESTAMP(3))
-				.build().toRowType()
-		);
+        final Map<String, String> fieldMapping = new HashMap<>();
+        fieldMapping.put(FRUIT_NAME, NAME);
+        fieldMapping.put(NAME, NAME);
+        fieldMapping.put(COUNT, COUNT);
+        fieldMapping.put(TIME, TIME);
 
-		final KafkaTableSourceBase expected = getExpectedKafkaTableSource(
-			schema,
-			Optional.of(PROC_TIME),
-			rowtimeAttributeDescriptors,
-			fieldMapping,
-			TOPIC,
-			KAFKA_PROPERTIES,
-			deserializationSchema,
-			StartupMode.SPECIFIC_OFFSETS,
-			specificOffsets,
-			0L);
+        final Map<KafkaTopicPartition, Long> specificOffsets = new HashMap<>();
+        specificOffsets.put(new KafkaTopicPartition(TOPIC, PARTITION_0), OFFSET_0);
+        specificOffsets.put(new KafkaTopicPartition(TOPIC, PARTITION_1), OFFSET_1);
 
-		TableSourceValidation.validateTableSource(expected, schema);
+        final DeserializationSchemaMock deserializationSchema =
+                new DeserializationSchemaMock(
+                        TableSchema.builder()
+                                .field(NAME, DataTypes.STRING())
+                                .field(COUNT, DataTypes.DECIMAL(38, 18))
+                                .field(TIME, DataTypes.TIMESTAMP(3))
+                                .build()
+                                .toRowType());
 
-		// construct table source using descriptors and table source factory
-		final Map<String, String> legacyPropertiesMap = new HashMap<>();
-		legacyPropertiesMap.putAll(createKafkaSourceProperties());
+        final KafkaTableSourceBase expected =
+                getExpectedKafkaTableSource(
+                        schema,
+                        Optional.of(PROC_TIME),
+                        rowtimeAttributeDescriptors,
+                        fieldMapping,
+                        TOPIC,
+                        KAFKA_PROPERTIES,
+                        deserializationSchema,
+                        StartupMode.SPECIFIC_OFFSETS,
+                        specificOffsets,
+                        0L);
 
-		// use legacy properties
-		legacyPropertiesMap.remove("connector.specific-offsets");
-		legacyPropertiesMap.remove("connector.properties.bootstrap.servers");
-		legacyPropertiesMap.remove("connector.properties.group.id");
+        TableSourceValidation.validateTableSource(expected, schema);
 
-		// keep compatible with a specified update-mode
-		legacyPropertiesMap.put("update-mode", "append");
+        // construct table source using descriptors and table source factory
+        final Map<String, String> legacyPropertiesMap = new HashMap<>();
+        legacyPropertiesMap.putAll(createKafkaSourceProperties());
 
-		// legacy properties for specific-offsets and properties
-		legacyPropertiesMap.put("connector.specific-offsets.0.partition", "0");
-		legacyPropertiesMap.put("connector.specific-offsets.0.offset", "100");
-		legacyPropertiesMap.put("connector.specific-offsets.1.partition", "1");
-		legacyPropertiesMap.put("connector.specific-offsets.1.offset", "123");
-		legacyPropertiesMap.put("connector.properties.0.key", "bootstrap.servers");
-		legacyPropertiesMap.put("connector.properties.0.value", "dummy");
-		legacyPropertiesMap.put("connector.properties.1.key", "group.id");
-		legacyPropertiesMap.put("connector.properties.1.value", "dummy");
+        // use legacy properties
+        legacyPropertiesMap.remove("connector.specific-offsets");
+        legacyPropertiesMap.remove("connector.properties.bootstrap.servers");
+        legacyPropertiesMap.remove("connector.properties.group.id");
 
-		final TableSource<?> actualSource = TableFactoryService.find(StreamTableSourceFactory.class, legacyPropertiesMap)
-			.createStreamTableSource(legacyPropertiesMap);
+        // keep compatible with a specified update-mode
+        legacyPropertiesMap.put("update-mode", "append");
 
-		assertEquals(expected, actualSource);
+        // legacy properties for specific-offsets and properties
+        legacyPropertiesMap.put("connector.specific-offsets.0.partition", "0");
+        legacyPropertiesMap.put("connector.specific-offsets.0.offset", "100");
+        legacyPropertiesMap.put("connector.specific-offsets.1.partition", "1");
+        legacyPropertiesMap.put("connector.specific-offsets.1.offset", "123");
+        legacyPropertiesMap.put("connector.properties.0.key", "bootstrap.servers");
+        legacyPropertiesMap.put("connector.properties.0.value", "dummy");
+        legacyPropertiesMap.put("connector.properties.1.key", "group.id");
+        legacyPropertiesMap.put("connector.properties.1.value", "dummy");
 
-		// test Kafka consumer
-		final KafkaTableSourceBase actualKafkaSource = (KafkaTableSourceBase) actualSource;
-		final StreamExecutionEnvironmentMock mock = new StreamExecutionEnvironmentMock();
-		actualKafkaSource.getDataStream(mock);
-		assertTrue(getExpectedFlinkKafkaConsumer().isAssignableFrom(mock.sourceFunction.getClass()));
-	}
+        final TableSource<?> actualSource =
+                TableFactoryService.find(StreamTableSourceFactory.class, legacyPropertiesMap)
+                        .createStreamTableSource(legacyPropertiesMap);
 
-	protected Map<String, String> createKafkaSourceProperties() {
-		return new TestTableDescriptor(
-				new Kafka()
-					.version(getKafkaVersion())
-					.topic(TOPIC)
-					.properties(KAFKA_PROPERTIES)
-					.sinkPartitionerRoundRobin() // test if accepted although not needed
-					.startFromSpecificOffsets(OFFSETS))
-				.withFormat(new TestTableFormat())
-				.withSchema(
-					new Schema()
-						.field(FRUIT_NAME, DataTypes.STRING()).from(NAME)
-						.field(COUNT, DataTypes.DECIMAL(38, 18)) // no from so it must match with the input
-						.field(EVENT_TIME, DataTypes.TIMESTAMP(3)).rowtime(
-							new Rowtime().timestampsFromField(TIME).watermarksPeriodicAscending())
-						.field(PROC_TIME, DataTypes.TIMESTAMP(3)).proctime())
-				.toProperties();
-	}
+        assertEquals(expected, actualSource);
 
+        // test Kafka consumer
+        final KafkaTableSourceBase actualKafkaSource = (KafkaTableSourceBase) actualSource;
+        final StreamExecutionEnvironmentMock mock = new StreamExecutionEnvironmentMock();
+        actualKafkaSource.getDataStream(mock);
+        assertTrue(
+                getExpectedFlinkKafkaConsumer().isAssignableFrom(mock.sourceFunction.getClass()));
+    }
 
-	/**
-	 * This test can be unified with the corresponding source test once we have fixed FLINK-9870.
-	 */
-	@Test
-	public void testTableSink() {
-		// prepare parameters for Kafka table sink
-		final TableSchema schema = TableSchema.builder()
-			.field(FRUIT_NAME, DataTypes.STRING())
-			.field(COUNT, DataTypes.DECIMAL(10, 4))
-			.field(EVENT_TIME, DataTypes.TIMESTAMP(3))
-			.build();
+    protected Map<String, String> createKafkaSourceProperties() {
+        final Map<String, String> map = new HashMap<>();
+        map.put("schema.0.data-type", "VARCHAR(2147483647)");
+        map.put("schema.2.rowtime.timestamps.type", "from-field");
+        map.put("connector.topic", "myTopic");
+        map.put("connector.specific-offsets", "partition:0,offset:100;partition:1,offset:123");
+        map.put("schema.1.name", "count");
+        map.put("connector.property-version", "1");
+        map.put("format.common-path", "/path/to/sth");
+        map.put("schema.3.data-type", "TIMESTAMP(3)");
+        map.put("schema.2.rowtime.timestamps.from", "time");
+        map.put("schema.3.name", "proc-time");
+        map.put("schema.0.name", "fruit-name");
+        map.put("schema.2.name", "event-time");
+        map.put("connector.startup-mode", "specific-offsets");
+        map.put("connector.properties.group.id", "dummy");
+        map.put("format.type", "test-format");
+        map.put("schema.1.data-type", "DECIMAL(38, 18)");
+        map.put("schema.0.from", "name");
+        map.put("connector.version", getKafkaVersion());
+        map.put("schema.2.rowtime.watermarks.type", "periodic-ascending");
+        map.put("schema.2.data-type", "TIMESTAMP(3)");
+        map.put("format.property-version", "1");
+        map.put("format.derive-schema", "true");
+        map.put("connector.type", "kafka");
+        map.put("connector.properties.bootstrap.servers", "dummy");
+        map.put("schema.3.proctime", "true");
+        // test if accepted although not needed
+        map.put("connector.sink-partitioner", "round-robin");
+        return map;
+    }
 
-		final KafkaTableSinkBase expected = getExpectedKafkaTableSink(
-			schema,
-			TOPIC,
-			KAFKA_PROPERTIES,
-			Optional.of(new FlinkFixedPartitioner<>()),
-			new TestSerializationSchema(schema.toRowType()));
+    /**
+     * This test can be unified with the corresponding source test once we have fixed FLINK-9870.
+     */
+    @Test
+    public void testTableSink() {
+        // prepare parameters for Kafka table sink
+        final TableSchema schema =
+                TableSchema.builder()
+                        .field(FRUIT_NAME, DataTypes.STRING())
+                        .field(COUNT, DataTypes.DECIMAL(10, 4))
+                        .field(EVENT_TIME, DataTypes.TIMESTAMP(3))
+                        .build();
 
-		// construct table sink using descriptors and table sink factory
-		final Map<String, String> propertiesMap = createKafkaSinkProperties();
-		final TableSink<?> actualSink = TableFactoryService.find(StreamTableSinkFactory.class, propertiesMap)
-			.createStreamTableSink(propertiesMap);
+        final KafkaTableSinkBase expected =
+                getExpectedKafkaTableSink(
+                        schema,
+                        TOPIC,
+                        KAFKA_PROPERTIES,
+                        Optional.of(new FlinkFixedPartitioner<>()),
+                        new SerializationSchemaMock(schema.toRowType()));
 
-		assertEquals(expected, actualSink);
+        // construct table sink using descriptors and table sink factory
+        final Map<String, String> propertiesMap = createKafkaSinkProperties();
+        final TableSink<?> actualSink =
+                TableFactoryService.find(StreamTableSinkFactory.class, propertiesMap)
+                        .createStreamTableSink(propertiesMap);
 
-		// test Kafka producer
-		final KafkaTableSinkBase actualKafkaSink = (KafkaTableSinkBase) actualSink;
-		final DataStreamMock streamMock = new DataStreamMock(new StreamExecutionEnvironmentMock(), schema.toRowType());
-		actualKafkaSink.consumeDataStream(streamMock);
-		assertTrue(getExpectedFlinkKafkaProducer().isAssignableFrom(streamMock.sinkFunction.getClass()));
-	}
+        assertEquals(expected, actualSink);
 
-	@Test
-	public void testTableSinkWithLegacyProperties() {
-		// prepare parameters for Kafka table sink
-		final TableSchema schema = TableSchema.builder()
-			.field(FRUIT_NAME, DataTypes.STRING())
-			.field(COUNT, DataTypes.DECIMAL(10, 4))
-			.field(EVENT_TIME, DataTypes.TIMESTAMP(3))
-			.build();
+        // test Kafka producer
+        final KafkaTableSinkBase actualKafkaSink = (KafkaTableSinkBase) actualSink;
+        final DataStreamMock streamMock =
+                new DataStreamMock(new StreamExecutionEnvironmentMock(), schema.toRowType());
+        actualKafkaSink.consumeDataStream(streamMock);
+        assertTrue(
+                getExpectedFlinkKafkaProducer()
+                        .isAssignableFrom(streamMock.sinkFunction.getClass()));
+    }
 
-		final KafkaTableSinkBase expected = getExpectedKafkaTableSink(
-			schema,
-			TOPIC,
-			KAFKA_PROPERTIES,
-			Optional.of(new FlinkFixedPartitioner<>()),
-			new TestSerializationSchema(schema.toRowType()));
+    @Test
+    public void testTableSinkWithLegacyProperties() {
+        // prepare parameters for Kafka table sink
+        final TableSchema schema =
+                TableSchema.builder()
+                        .field(FRUIT_NAME, DataTypes.STRING())
+                        .field(COUNT, DataTypes.DECIMAL(10, 4))
+                        .field(EVENT_TIME, DataTypes.TIMESTAMP(3))
+                        .build();
 
-		// construct table sink using descriptors and table sink factory
-		final Map<String, String> legacyPropertiesMap = new HashMap<>();
-		legacyPropertiesMap.putAll(createKafkaSinkProperties());
+        final KafkaTableSinkBase expected =
+                getExpectedKafkaTableSink(
+                        schema,
+                        TOPIC,
+                        KAFKA_PROPERTIES,
+                        Optional.of(new FlinkFixedPartitioner<>()),
+                        new SerializationSchemaMock(schema.toRowType()));
 
-		// use legacy properties
-		legacyPropertiesMap.remove("connector.specific-offsets");
-		legacyPropertiesMap.remove("connector.properties.bootstrap.servers");
-		legacyPropertiesMap.remove("connector.properties.group.id");
+        // construct table sink using descriptors and table sink factory
+        final Map<String, String> legacyPropertiesMap = new HashMap<>();
+        legacyPropertiesMap.putAll(createKafkaSinkProperties());
 
-		// keep compatible with a specified update-mode
-		legacyPropertiesMap.put("update-mode", "append");
+        // use legacy properties
+        legacyPropertiesMap.remove("connector.specific-offsets");
+        legacyPropertiesMap.remove("connector.properties.bootstrap.servers");
+        legacyPropertiesMap.remove("connector.properties.group.id");
 
-		// legacy properties for specific-offsets and properties
-		legacyPropertiesMap.put("connector.specific-offsets.0.partition", "0");
-		legacyPropertiesMap.put("connector.specific-offsets.0.offset", "100");
-		legacyPropertiesMap.put("connector.specific-offsets.1.partition", "1");
-		legacyPropertiesMap.put("connector.specific-offsets.1.offset", "123");
-		legacyPropertiesMap.put("connector.properties.0.key", "bootstrap.servers");
-		legacyPropertiesMap.put("connector.properties.0.value", "dummy");
-		legacyPropertiesMap.put("connector.properties.1.key", "group.id");
-		legacyPropertiesMap.put("connector.properties.1.value", "dummy");
+        // keep compatible with a specified update-mode
+        legacyPropertiesMap.put("update-mode", "append");
 
-		final TableSink<?> actualSink = TableFactoryService.find(StreamTableSinkFactory.class, legacyPropertiesMap)
-			.createStreamTableSink(legacyPropertiesMap);
+        // legacy properties for specific-offsets and properties
+        legacyPropertiesMap.put("connector.specific-offsets.0.partition", "0");
+        legacyPropertiesMap.put("connector.specific-offsets.0.offset", "100");
+        legacyPropertiesMap.put("connector.specific-offsets.1.partition", "1");
+        legacyPropertiesMap.put("connector.specific-offsets.1.offset", "123");
+        legacyPropertiesMap.put("connector.properties.0.key", "bootstrap.servers");
+        legacyPropertiesMap.put("connector.properties.0.value", "dummy");
+        legacyPropertiesMap.put("connector.properties.1.key", "group.id");
+        legacyPropertiesMap.put("connector.properties.1.value", "dummy");
 
-		assertEquals(expected, actualSink);
+        final TableSink<?> actualSink =
+                TableFactoryService.find(StreamTableSinkFactory.class, legacyPropertiesMap)
+                        .createStreamTableSink(legacyPropertiesMap);
 
-		// test Kafka producer
-		final KafkaTableSinkBase actualKafkaSink = (KafkaTableSinkBase) actualSink;
-		final DataStreamMock streamMock = new DataStreamMock(new StreamExecutionEnvironmentMock(), schema.toRowType());
-		actualKafkaSink.consumeDataStream(streamMock);
-		assertTrue(getExpectedFlinkKafkaProducer().isAssignableFrom(streamMock.sinkFunction.getClass()));
-	}
+        assertEquals(expected, actualSink);
 
-	protected Map<String, String> createKafkaSinkProperties() {
-		return new TestTableDescriptor(
-			new Kafka()
-				.version(getKafkaVersion())
-				.topic(TOPIC)
-				.properties(KAFKA_PROPERTIES)
-				.sinkPartitionerFixed()
-				.startFromSpecificOffsets(OFFSETS)) // test if they accepted although not needed
-			.withFormat(new TestTableFormat())
-			.withSchema(
-				new Schema()
-					.field(FRUIT_NAME, DataTypes.STRING())
-					.field(COUNT, DataTypes.DECIMAL(10, 4))
-					.field(EVENT_TIME, DataTypes.TIMESTAMP(3)))
-			.inAppendMode()
-			.toProperties();
-	}
+        // test Kafka producer
+        final KafkaTableSinkBase actualKafkaSink = (KafkaTableSinkBase) actualSink;
+        final DataStreamMock streamMock =
+                new DataStreamMock(new StreamExecutionEnvironmentMock(), schema.toRowType());
+        actualKafkaSink.consumeDataStream(streamMock);
+        assertTrue(
+                getExpectedFlinkKafkaProducer()
+                        .isAssignableFrom(streamMock.sinkFunction.getClass()));
+    }
 
-	private static class StreamExecutionEnvironmentMock extends StreamExecutionEnvironment {
+    protected Map<String, String> createKafkaSinkProperties() {
+        final Map<String, String> map = new HashMap<>();
+        map.put("schema.0.data-type", "VARCHAR(2147483647)");
+        map.put("connector.topic", "myTopic");
+        map.put("connector.specific-offsets", "partition:0,offset:100;partition:1,offset:123");
+        map.put("schema.2.name", "event-time");
+        // test if they accepted although not needed
+        map.put("connector.startup-mode", "specific-offsets");
+        map.put("update-mode", "append");
+        map.put("schema.1.name", "count");
+        map.put("connector.properties.group.id", "dummy");
+        map.put("connector.property-version", "1");
+        map.put("format.type", "test-format");
+        map.put("schema.1.data-type", "DECIMAL(10, 4)");
+        map.put("format.common-path", "/path/to/sth");
+        map.put("connector.version", getKafkaVersion());
+        map.put("schema.2.data-type", "TIMESTAMP(3)");
+        map.put("format.property-version", "1");
+        map.put("format.derive-schema", "true");
+        map.put("connector.type", "kafka");
+        map.put("connector.properties.bootstrap.servers", "dummy");
+        map.put("connector.sink-partitioner", "fixed");
+        map.put("schema.0.name", "fruit-name");
+        return map;
+    }
 
-		public SourceFunction<?> sourceFunction;
+    // --------------------------------------------------------------------------------------------
+    // For version-specific tests
+    // --------------------------------------------------------------------------------------------
 
-		@Override
-		public <OUT> DataStreamSource<OUT> addSource(SourceFunction<OUT> sourceFunction) {
-			this.sourceFunction = sourceFunction;
-			return super.addSource(sourceFunction);
-		}
+    protected abstract String getKafkaVersion();
 
-		@Override
-		public JobExecutionResult execute(StreamGraph streamGraph) throws Exception {
-			throw new UnsupportedOperationException();
-		}
-	}
+    protected abstract Class<FlinkKafkaConsumerBase<Row>> getExpectedFlinkKafkaConsumer();
 
-	private static class DataStreamMock extends DataStream<Row> {
+    protected abstract Class<?> getExpectedFlinkKafkaProducer();
 
-		public SinkFunction<?> sinkFunction;
+    protected abstract KafkaTableSourceBase getExpectedKafkaTableSource(
+            TableSchema schema,
+            Optional<String> proctimeAttribute,
+            List<RowtimeAttributeDescriptor> rowtimeAttributeDescriptors,
+            Map<String, String> fieldMapping,
+            String topic,
+            Properties properties,
+            DeserializationSchema<Row> deserializationSchema,
+            StartupMode startupMode,
+            Map<KafkaTopicPartition, Long> specificStartupOffsets,
+            long startupTimestampMillis);
 
-		public DataStreamMock(StreamExecutionEnvironment environment, TypeInformation<Row> outType) {
-			super(environment, new TransformationMock("name", outType, 1));
-		}
+    protected abstract KafkaTableSinkBase getExpectedKafkaTableSink(
+            TableSchema schema,
+            String topic,
+            Properties properties,
+            Optional<FlinkKafkaPartitioner<Row>> partitioner,
+            SerializationSchema<Row> serializationSchema);
 
-		@Override
-		public DataStreamSink<Row> addSink(SinkFunction<Row> sinkFunction) {
-			this.sinkFunction = sinkFunction;
-			return super.addSink(sinkFunction);
-		}
-	}
+    // --------------------------------------------------------------------------------------------
+    // Mocks
+    // --------------------------------------------------------------------------------------------
 
-	private static class TransformationMock extends Transformation<Row> {
+    private static class StreamExecutionEnvironmentMock extends StreamExecutionEnvironment {
 
-		public TransformationMock(String name, TypeInformation<Row> outputType, int parallelism) {
-			super(name, outputType, parallelism);
-		}
+        public SourceFunction<?> sourceFunction;
 
-		@Override
-		public List<Transformation<?>> getTransitivePredecessors() {
-			return null;
-		}
+        @Override
+        public <OUT> DataStreamSource<OUT> addSource(SourceFunction<OUT> sourceFunction) {
+            this.sourceFunction = sourceFunction;
+            return super.addSource(sourceFunction);
+        }
 
-		@Override
-		public List<Transformation<?>> getInputs() {
-			return Collections.emptyList();
-		}
-	}
+        @Override
+        public JobExecutionResult execute(StreamGraph streamGraph) throws Exception {
+            throw new UnsupportedOperationException();
+        }
+    }
 
-	// --------------------------------------------------------------------------------------------
-	// For version-specific tests
-	// --------------------------------------------------------------------------------------------
+    private static class DataStreamMock extends DataStream<Row> {
 
-	protected abstract String getKafkaVersion();
+        public SinkFunction<?> sinkFunction;
 
-	protected abstract Class<FlinkKafkaConsumerBase<Row>> getExpectedFlinkKafkaConsumer();
+        public DataStreamMock(
+                StreamExecutionEnvironment environment, TypeInformation<Row> outType) {
+            super(environment, new TransformationMock("name", outType, 1));
+        }
 
-	protected abstract Class<?> getExpectedFlinkKafkaProducer();
+        @Override
+        public DataStreamSink<Row> addSink(SinkFunction<Row> sinkFunction) {
+            this.sinkFunction = sinkFunction;
+            return super.addSink(sinkFunction);
+        }
+    }
 
-	protected abstract KafkaTableSourceBase getExpectedKafkaTableSource(
-		TableSchema schema,
-		Optional<String> proctimeAttribute,
-		List<RowtimeAttributeDescriptor> rowtimeAttributeDescriptors,
-		Map<String, String> fieldMapping,
-		String topic,
-		Properties properties,
-		DeserializationSchema<Row> deserializationSchema,
-		StartupMode startupMode,
-		Map<KafkaTopicPartition, Long> specificStartupOffsets,
-		long startupTimestampMillis);
+    private static class TransformationMock extends Transformation<Row> {
 
-	protected abstract KafkaTableSinkBase getExpectedKafkaTableSink(
-		TableSchema schema,
-		String topic,
-		Properties properties,
-		Optional<FlinkKafkaPartitioner<Row>> partitioner,
-		SerializationSchema<Row> serializationSchema);
+        public TransformationMock(String name, TypeInformation<Row> outputType, int parallelism) {
+            super(name, outputType, parallelism);
+        }
+
+        @Override
+        public List<Transformation<?>> getTransitivePredecessors() {
+            return null;
+        }
+
+        @Override
+        public List<Transformation<?>> getInputs() {
+            return Collections.emptyList();
+        }
+    }
+
+    /** Legacy format serialization schema for testing. */
+    private static class SerializationSchemaMock implements SerializationSchema<Row> {
+
+        private final TypeInformation<Row> rowTypeInfo;
+
+        public SerializationSchemaMock(TypeInformation<Row> rowTypeInfo) {
+            this.rowTypeInfo = rowTypeInfo;
+        }
+
+        @Override
+        public byte[] serialize(Row element) {
+            return new byte[0];
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            SerializationSchemaMock that = (SerializationSchemaMock) o;
+            return rowTypeInfo.equals(that.rowTypeInfo);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(rowTypeInfo);
+        }
+    }
+
+    /** Legacy format deserialization schema for testing. */
+    private static class DeserializationSchemaMock implements DeserializationSchema<Row> {
+
+        private final TypeInformation<Row> rowTypeInfo;
+
+        public DeserializationSchemaMock(TypeInformation<Row> rowTypeInfo) {
+            this.rowTypeInfo = rowTypeInfo;
+        }
+
+        @Override
+        public Row deserialize(byte[] message) throws IOException {
+            return null;
+        }
+
+        @Override
+        public boolean isEndOfStream(Row nextElement) {
+            return false;
+        }
+
+        @Override
+        public TypeInformation<Row> getProducedType() {
+            return rowTypeInfo;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            DeserializationSchemaMock that = (DeserializationSchemaMock) o;
+            return rowTypeInfo.equals(that.rowTypeInfo);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(rowTypeInfo);
+        }
+    }
+
+    /** Legacy format factory for testing. */
+    public static class TestFormatFactory extends TableFormatFactoryBase<Row>
+            implements SerializationSchemaFactory<Row>, DeserializationSchemaFactory<Row> {
+
+        public TestFormatFactory() {
+            super("test-format", 1, true);
+        }
+
+        @Override
+        protected List<String> supportedFormatProperties() {
+            return Arrays.asList("format.unique-property", "format.common-path");
+        }
+
+        @Override
+        public DeserializationSchema<Row> createDeserializationSchema(
+                Map<String, String> properties) {
+            return new DeserializationSchemaMock(deriveSchema(properties).toRowType());
+        }
+
+        @Override
+        public SerializationSchema<Row> createSerializationSchema(Map<String, String> properties) {
+            return new SerializationSchemaMock(deriveSchema(properties).toRowType());
+        }
+    }
 }
