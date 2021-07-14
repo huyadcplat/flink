@@ -135,7 +135,8 @@ public class SlotPoolImpl implements SlotPool {
     private JobMasterId jobMasterId;
 
     /** The gateway to communicate with resource manager. */
-    @Nullable private ResourceManagerGateway resourceManagerGateway;
+    @Nullable
+    private ResourceManagerGateway resourceManagerGateway;
 
     private String jobManagerAddress;
 
@@ -313,8 +314,9 @@ public class SlotPoolImpl implements SlotPool {
      * connected, then the request is stashed and send once a new ResourceManager is connected.
      *
      * @param pendingRequest pending slot request
+     *
      * @return An {@link AllocatedSlot} future which is completed once the slot is offered to the
-     *     {@link SlotPool}
+     *         {@link SlotPool}
      */
     @Nonnull
     private CompletableFuture<AllocatedSlot> requestNewAllocatedSlotInternal(
@@ -424,7 +426,7 @@ public class SlotPoolImpl implements SlotPool {
             PendingRequest request, Throwable failure) {
         return request.isBatchRequest
                 && !ExceptionUtils.findThrowable(failure, UnfulfillableSlotRequestException.class)
-                        .isPresent();
+                .isPresent();
     }
 
     // ------------------------------------------------------------------------
@@ -473,10 +475,10 @@ public class SlotPoolImpl implements SlotPool {
         if (timeout != null) {
             // register request timeout
             FutureUtils.orTimeout(
-                            pendingRequest.getAllocatedSlotFuture(),
-                            timeout.toMilliseconds(),
-                            TimeUnit.MILLISECONDS,
-                            componentMainThreadExecutor)
+                    pendingRequest.getAllocatedSlotFuture(),
+                    timeout.toMilliseconds(),
+                    TimeUnit.MILLISECONDS,
+                    componentMainThreadExecutor)
                     .whenComplete(
                             (AllocatedSlot ignored, Throwable throwable) -> {
                                 if (throwable instanceof TimeoutException) {
@@ -563,6 +565,7 @@ public class SlotPoolImpl implements SlotPool {
      * from the internal data structures.
      *
      * @param requestId identifying the pending request
+     *
      * @return pending request if there is one, otherwise null
      */
     @Nullable
@@ -573,7 +576,7 @@ public class SlotPoolImpl implements SlotPool {
             // sanity check
             assert !pendingRequests.containsKeyA(requestId)
                     : "A pending requests should only be part of either "
-                            + "the pendingRequests or waitingForResourceManager but not both.";
+                    + "the pendingRequests or waitingForResourceManager but not both.";
 
             return result;
         } else {
@@ -633,6 +636,13 @@ public class SlotPoolImpl implements SlotPool {
 
     private PendingRequest findMatchingPendingRequest(final AllocatedSlot slot) {
         final ResourceProfile slotResources = slot.getResourceProfile();
+
+        for (PendingRequest request : pendingRequests.values()) {
+            if (slot.getAllocationId().equals(request.getAllocationId().orElseGet(null))
+                    && slotResources.isMatching(request.getResourceProfile())) {
+                return request;
+            }
+        }
 
         // try the requests sent to the resource manager first
         for (PendingRequest request : pendingRequests.values()) {
@@ -713,6 +723,7 @@ public class SlotPoolImpl implements SlotPool {
      * @param taskManagerLocation location from where the offer comes from
      * @param taskManagerGateway TaskManager gateway
      * @param slotOffer the offered slot
+     *
      * @return True if we accept the offering
      */
     boolean offerSlot(
@@ -799,6 +810,7 @@ public class SlotPoolImpl implements SlotPool {
      *
      * @param allocationID Represents the allocation which should be failed
      * @param cause The cause of the failure
+     *
      * @return Optional task executor if it has no more slots registered
      */
     @Override
@@ -1038,16 +1050,16 @@ public class SlotPoolImpl implements SlotPool {
 
     private Set<ResourceProfile> getAllocatedResourceProfiles() {
         return Stream.concat(
-                        getAvailableSlotsInformation().stream(),
-                        getAllocatedSlotsInformation().stream())
+                getAvailableSlotsInformation().stream(),
+                getAllocatedSlotsInformation().stream())
                 .map(SlotInfo::getResourceProfile)
                 .collect(Collectors.toSet());
     }
 
     private Collection<PendingRequest> getPendingBatchRequests() {
         return Stream.concat(
-                        pendingRequests.values().stream(),
-                        waitingForResourceManager.values().stream())
+                pendingRequests.values().stream(),
+                waitingForResourceManager.values().stream())
                 .filter(PendingRequest::isBatchRequest)
                 .collect(Collectors.toList());
     }
@@ -1180,6 +1192,7 @@ public class SlotPoolImpl implements SlotPool {
          * Get allocated slot with allocation id.
          *
          * @param allocationID The allocation id
+         *
          * @return The allocated slot, null if we can't find a match
          */
         @Nullable
@@ -1191,6 +1204,7 @@ public class SlotPoolImpl implements SlotPool {
          * Check whether we have allocated this slot.
          *
          * @param slotAllocationId The allocation id of the slot to check
+         *
          * @return True if we contains this slot
          */
         boolean contains(AllocationID slotAllocationId) {
@@ -1201,6 +1215,7 @@ public class SlotPoolImpl implements SlotPool {
          * Removes the allocated slot specified by the provided slot allocation id.
          *
          * @param allocationID identifying the allocated slot to remove
+         *
          * @return The removed allocated slot or null.
          */
         @Nullable
@@ -1218,6 +1233,7 @@ public class SlotPoolImpl implements SlotPool {
          * Removes the allocated slot specified by the provided slot request id.
          *
          * @param slotRequestId identifying the allocated slot to remove
+         *
          * @return The removed allocated slot or null.
          */
         @Nullable
@@ -1247,6 +1263,7 @@ public class SlotPoolImpl implements SlotPool {
          * Get all allocated slot from same TaskManager.
          *
          * @param resourceID The id of the TaskManager
+         *
          * @return Set of slots which are allocated from the same TaskManager
          */
         Set<AllocatedSlot> removeSlotsForTaskManager(final ResourceID resourceID) {
@@ -1361,6 +1378,7 @@ public class SlotPoolImpl implements SlotPool {
          * Remove all available slots come from specified TaskManager.
          *
          * @param taskManager The id of the TaskManager
+         *
          * @return The set of removed slots for the given TaskManager
          */
         Set<AllocatedSlot> removeAllForTaskManager(final ResourceID taskManager) {
@@ -1470,7 +1488,8 @@ public class SlotPoolImpl implements SlotPool {
 
         private final CompletableFuture<AllocatedSlot> allocatedSlotFuture;
 
-        @Nullable private AllocationID allocationId;
+        @Nullable
+        private AllocationID allocationId;
 
         private long unfillableSince;
 

@@ -30,7 +30,7 @@ under the License.
 		<relativePath>..</relativePath>
 	</parent>
 
-	<version>1.12-huya-SNAPSHOT</version>
+<!--	<version>1.12-huya-SNAPSHOT</version>-->
 	<artifactId>flink-connector-kafka_${scala.binary.version}</artifactId>
 	<name>Flink : Connectors : Kafka</name>
 
