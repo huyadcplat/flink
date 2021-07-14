@@ -20,26 +20,33 @@ package org.apache.flink.connector.hbase2;
 
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.connector.hbase.options.HBaseLookupOptions;
 import org.apache.flink.connector.hbase.options.HBaseWriteOptions;
 import org.apache.flink.connector.hbase.source.HBaseRowDataLookupFunction;
+import org.apache.flink.connector.hbase.util.HBaseConfigurationUtil;
 import org.apache.flink.connector.hbase.util.HBaseTableSchema;
 import org.apache.flink.connector.hbase2.sink.HBaseDynamicTableSink;
 import org.apache.flink.connector.hbase2.source.HBaseDynamicTableSource;
+import org.apache.flink.connector.hbase2.source.HBaseRowDataAsyncLookupFunction;
 import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.catalog.CatalogTableImpl;
 import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.connector.sink.SinkFunctionProvider;
+import org.apache.flink.table.connector.source.AsyncTableFunctionProvider;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.LookupTableSource;
 import org.apache.flink.table.connector.source.TableFunctionProvider;
 import org.apache.flink.table.factories.FactoryUtil;
+import org.apache.flink.table.functions.AsyncTableFunction;
 import org.apache.flink.table.functions.TableFunction;
 import org.apache.flink.table.runtime.connector.sink.SinkRuntimeProviderContext;
 import org.apache.flink.table.runtime.connector.source.LookupRuntimeProviderContext;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.util.ExceptionUtils;
 
+import org.apache.commons.collections.IteratorUtils;
+import org.apache.hadoop.hbase.HConstants;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
@@ -181,6 +188,22 @@ public class HBaseDynamicTableFactoryTest {
                 new DataType[] {DECIMAL(10, 3), TIMESTAMP(3), DATE(), TIME()},
                 hbaseSchema.getQualifierDataTypes("f4"));
 
+        // verify hadoop Configuration
+        org.apache.hadoop.conf.Configuration expectedConfiguration =
+                HBaseConfigurationUtil.getHBaseConfiguration();
+        expectedConfiguration.set(HConstants.ZOOKEEPER_QUORUM, "localhost:2181");
+        expectedConfiguration.set(HConstants.ZOOKEEPER_ZNODE_PARENT, "/flink");
+        expectedConfiguration.set("hbase.security.authentication", "kerberos");
+
+        org.apache.hadoop.conf.Configuration actualConfiguration = hbaseSink.getConfiguration();
+
+        assertEquals(
+                IteratorUtils.toList(expectedConfiguration.iterator()),
+                IteratorUtils.toList(actualConfiguration.iterator()));
+
+        // verify tableName
+        assertEquals("testHBastTable", hbaseSink.getTableName());
+
         HBaseWriteOptions expectedWriteOptions =
                 HBaseWriteOptions.builder()
                         .setBufferFlushMaxRows(1000)
@@ -225,6 +248,54 @@ public class HBaseDynamicTableFactoryTest {
                 (SinkFunctionProvider)
                         hbaseSink.getSinkRuntimeProvider(new SinkRuntimeProviderContext(false));
         assertEquals(2, (long) provider.getParallelism().get());
+    }
+
+    @Test
+    public void testLookupOptions() {
+        Map<String, String> options = getAllOptions();
+        options.put("lookup.cache.max-rows", "1000");
+        options.put("lookup.cache.ttl", "10s");
+        options.put("lookup.max-retries", "10");
+        TableSchema schema =
+                TableSchema.builder()
+                        .field(ROWKEY, STRING())
+                        .field(FAMILY1, ROW(FIELD(COL1, DOUBLE()), FIELD(COL2, INT())))
+                        .build();
+        DynamicTableSource source = createTableSource(schema, options);
+        HBaseLookupOptions actual = ((HBaseDynamicTableSource) source).getLookupOptions();
+        HBaseLookupOptions expected =
+                HBaseLookupOptions.builder()
+                        .setCacheMaxSize(1000)
+                        .setCacheExpireMs(10_000)
+                        .setMaxRetryTimes(10)
+                        .build();
+        assertEquals(expected, actual);
+    }
+
+    @Test
+    public void testLookupAsync() {
+        Map<String, String> options = getAllOptions();
+        options.put("lookup.async", "true");
+        TableSchema schema =
+                TableSchema.builder()
+                        .field(ROWKEY, STRING())
+                        .field(FAMILY1, ROW(FIELD(COL1, DOUBLE()), FIELD(COL2, INT())))
+                        .build();
+        DynamicTableSource source = createTableSource(schema, options);
+        assertTrue(source instanceof HBaseDynamicTableSource);
+        HBaseDynamicTableSource hbaseSource = (HBaseDynamicTableSource) source;
+
+        int[][] lookupKey = {{0}};
+        LookupTableSource.LookupRuntimeProvider lookupProvider =
+                hbaseSource.getLookupRuntimeProvider(new LookupRuntimeProviderContext(lookupKey));
+        assertTrue(lookupProvider instanceof AsyncTableFunctionProvider);
+
+        AsyncTableFunction asyncTableFunction =
+                ((AsyncTableFunctionProvider) lookupProvider).createAsyncTableFunction();
+        assertTrue(asyncTableFunction instanceof HBaseRowDataAsyncLookupFunction);
+        assertEquals(
+                "testHBastTable",
+                ((HBaseRowDataAsyncLookupFunction) asyncTableFunction).getHTableName());
     }
 
     @Test
@@ -348,6 +419,7 @@ public class HBaseDynamicTableFactoryTest {
         options.put("table-name", "testHBastTable");
         options.put("zookeeper.quorum", "localhost:2181");
         options.put("zookeeper.znode.parent", "/flink");
+        options.put("properties.hbase.security.authentication", "kerberos");
         return options;
     }
 

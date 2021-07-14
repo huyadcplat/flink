@@ -26,7 +26,7 @@ under the License.
 	<parent>
 		<artifactId>flink-connectors</artifactId>
 		<groupId>org.apache.flink</groupId>
-		<version>1.12.1</version>
+		<version>1.12.1-huya-SNAPSHOT</version>
 		<relativePath>..</relativePath>
 	</parent>
 
@@ -41,18 +41,7 @@ under the License.
 		<kafka.version>2.4.1</kafka.version>
 		<scala.binary.version>2.12</scala.binary.version>
 	</properties>
-	<distributionManagement>
-		<repository>
-			<id>huya-releases</id>
-			<name>Internal Releases</name>
-			<url>https://nexus.huya.com/repository/releases/</url>
-		</repository>
-		<snapshotRepository>
-			<id>huya-snapshots</id>
-			<name>Internal snapshots</name>
-			<url>https://nexus.huya.com/repository/snapshots/</url>
-		</snapshotRepository>
-	</distributionManagement>
+
 	<dependencies>
 
 		<!-- streaming-java dependencies -->

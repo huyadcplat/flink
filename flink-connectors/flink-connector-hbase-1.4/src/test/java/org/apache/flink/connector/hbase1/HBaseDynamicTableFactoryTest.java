@@ -20,10 +20,11 @@ package org.apache.flink.connector.hbase1;
 
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.connector.hbase.options.HBaseLookupOptions;
 import org.apache.flink.connector.hbase.options.HBaseWriteOptions;
 import org.apache.flink.connector.hbase.source.HBaseRowDataLookupFunction;
+import org.apache.flink.connector.hbase.util.HBaseConfigurationUtil;
 import org.apache.flink.connector.hbase.util.HBaseTableSchema;
-import org.apache.flink.connector.hbase1.options.HBaseOptions;
 import org.apache.flink.connector.hbase1.sink.HBaseDynamicTableSink;
 import org.apache.flink.connector.hbase1.source.HBaseDynamicTableSource;
 import org.apache.flink.table.api.TableSchema;
@@ -41,6 +42,8 @@ import org.apache.flink.table.runtime.connector.source.LookupRuntimeProviderCont
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.util.ExceptionUtils;
 
+import org.apache.commons.collections.IteratorUtils;
+import org.apache.hadoop.hbase.HConstants;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
@@ -182,14 +185,21 @@ public class HBaseDynamicTableFactoryTest {
                 new DataType[] {DECIMAL(10, 3), TIMESTAMP(3), DATE(), TIME()},
                 hbaseSchema.getQualifierDataTypes("f4"));
 
-        HBaseOptions expectedHBaseOptions =
-                HBaseOptions.builder()
-                        .setTableName("testHBastTable")
-                        .setZkQuorum("localhost:2181")
-                        .setZkNodeParent("/flink")
-                        .build();
-        HBaseOptions actualHBaseOptions = hbaseSink.getHBaseOptions();
-        assertEquals(expectedHBaseOptions, actualHBaseOptions);
+        // verify hadoop Configuration
+        org.apache.hadoop.conf.Configuration expectedConfiguration =
+                HBaseConfigurationUtil.getHBaseConfiguration();
+        expectedConfiguration.set(HConstants.ZOOKEEPER_QUORUM, "localhost:2181");
+        expectedConfiguration.set(HConstants.ZOOKEEPER_ZNODE_PARENT, "/flink");
+        expectedConfiguration.set("hbase.security.authentication", "kerberos");
+
+        org.apache.hadoop.conf.Configuration actualConfiguration = hbaseSink.getConfiguration();
+
+        assertEquals(
+                IteratorUtils.toList(expectedConfiguration.iterator()),
+                IteratorUtils.toList(actualConfiguration.iterator()));
+
+        // verify tableName
+        assertEquals("testHBastTable", hbaseSink.getTableName());
 
         HBaseWriteOptions expectedWriteOptions =
                 HBaseWriteOptions.builder()
@@ -235,6 +245,28 @@ public class HBaseDynamicTableFactoryTest {
                 (SinkFunctionProvider)
                         hbaseSink.getSinkRuntimeProvider(new SinkRuntimeProviderContext(false));
         assertEquals(2, (long) provider.getParallelism().get());
+    }
+
+    @Test
+    public void testLookupOptions() {
+        Map<String, String> options = getAllOptions();
+        options.put("lookup.cache.max-rows", "1000");
+        options.put("lookup.cache.ttl", "10s");
+        options.put("lookup.max-retries", "10");
+        TableSchema schema =
+                TableSchema.builder()
+                        .field(ROWKEY, STRING())
+                        .field(FAMILY1, ROW(FIELD(COL1, DOUBLE()), FIELD(COL2, INT())))
+                        .build();
+        DynamicTableSource source = createTableSource(schema, options);
+        HBaseLookupOptions actual = ((HBaseDynamicTableSource) source).getLookupOptions();
+        HBaseLookupOptions expected =
+                HBaseLookupOptions.builder()
+                        .setCacheMaxSize(1000)
+                        .setCacheExpireMs(10_000)
+                        .setMaxRetryTimes(10)
+                        .build();
+        assertEquals(expected, actual);
     }
 
     @Test
@@ -358,6 +390,7 @@ public class HBaseDynamicTableFactoryTest {
         options.put("table-name", "testHBastTable");
         options.put("zookeeper.quorum", "localhost:2181");
         options.put("zookeeper.znode.parent", "/flink");
+        options.put("properties.hbase.security.authentication", "kerberos");
         return options;
     }
 
