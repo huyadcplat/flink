@@ -29,12 +29,15 @@ import org.apache.flink.runtime.jobmaster.slotpool.PhysicalSlotRequest;
 import org.apache.flink.runtime.jobmaster.slotpool.PhysicalSlotRequestBulkChecker;
 import org.apache.flink.runtime.scheduler.SharedSlotProfileRetriever.SharedSlotProfileRetrieverFactory;
 import org.apache.flink.runtime.scheduler.strategy.ExecutionVertexID;
+import org.apache.flink.util.Collector;
 import org.apache.flink.util.FlinkException;
 import org.apache.flink.util.Preconditions;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -133,8 +136,13 @@ class SlotSharingExecutionSlotAllocator implements ExecutionSlotAllocator {
                                 Collectors.groupingBy(
                                         slotSharingStrategy::getExecutionSlotSharingGroup));
 
+        List<ExecutionSlotSharingGroup> sortedGroup = executionsByGroup.keySet().stream()
+                .sorted(Comparator.comparing(c->c.getExecutionVertexIds().size()))
+                .collect(Collectors.toList());
+        Collections.reverse(sortedGroup);
+
         Map<ExecutionSlotSharingGroup, SharedSlot> slots =
-                executionsByGroup.keySet().stream()
+                sortedGroup.stream()
                         .map(group -> getOrAllocateSharedSlot(group, sharedSlotProfileRetriever))
                         .collect(
                                 Collectors.toMap(
